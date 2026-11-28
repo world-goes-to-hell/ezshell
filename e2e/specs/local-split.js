@@ -287,11 +287,15 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   const release = ([x, y]) => send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, modifiers: 1, button: 'left', buttons: 0, clickCount: 1 })
   const closingPreview = `!!document.querySelector('.pane-merge-preview.is-closing')`
 
+  // The only pane of a tab: the scribble closes the tab (2026-11-27 user request)
   let stroke = await scribble(0)
-  check('scribbling over the only pane offers no close', !(await js(closingPreview)))
+  check('scribbling over the only pane previews closing the tab', await until(`${closingPreview}
+    && document.querySelector('.pane-merge-preview.is-closing').textContent.includes('놓으면 이 탭을 닫습니다')`, 3000))
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
   await release(stroke.end)
   await sleep(400)
-  check('and the pane stays', (await js(`${PANES}.length`)) === 1)
+  check('Esc keeps the tab and its pane', (await js(`${PANES}.length`)) === 1 && (await tabCount()) === 1)
 
   await menuAt(0); await pick('좌우 분할')
   check('the tab splits for the scribble', await ready(2))
@@ -329,8 +333,13 @@ const check = (n, ok, d = '') => { if (!ok) failures++; console.log(`${ok ? 'PAS
   check('letting go closes that pane and the other fills the tab', await until(`${PANES}.length === 1 && ${PANES}[0].textContent.includes('KEEP-LEFT')`, 8000), JSON.stringify((await texts()).map(x => x.slice(-80))))
   check('the scribbled shell is closed in the main process', await until(`window.electronAPI.localShellAttach(${JSON.stringify(scribbledShell)}).then(state => state === null)`, 8000))
   await shot('4-scribble-closed')
-  await js(`document.querySelectorAll('.terminal-tab')[0].querySelector('.tab-close')?.click()`); await sleep(800)
-  check('the last tab closes', (await tabCount()) === 0, String(await tabCount()))
+  const lastShell = await js(`${PANES}[0].dataset.localShellId`)
+  stroke = await scribble(0)
+  check('the remaining single pane previews closing the tab', await until(`${closingPreview}
+    && document.querySelector('.pane-merge-preview.is-closing').textContent.includes('놓으면 이 탭을 닫습니다')`, 3000))
+  await release(stroke.end)
+  check('letting go over the only pane closes the tab as 탭 닫기 does', await until(`document.querySelectorAll('.terminal-tab').length === 0`, 8000), String(await tabCount()))
+  check('and its shell is closed in the main process', await until(`window.electronAPI.localShellAttach(${JSON.stringify(lastShell)}).then(state => state === null)`, 8000))
 
   console.log(failures ? `${failures} FAILED` : 'ALL PASSED')
   process.exit(failures ? 1 : 0)

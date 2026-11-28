@@ -15,8 +15,10 @@ const exec = promisify(execFile)
 const DIRECTORY_LIMIT = 1000
 const COMMIT_LIMIT = 100
 const WORKSPACE_REPOSITORIES = { directoryLimit: 512, skip: name => name === '.git' || name === 'node_modules' }
+// Three levels (2026-11-27 user request: repositories like group/team/service were missed at two). The
+// folder cap keeps a wide tree (a home folder, a monorepo) from turning the third level into a long scan.
 const SIDEBAR_REPOSITORIES = {
-  depth: 2, repositoryLimit: 50,
+  depth: 3, repositoryLimit: 50, directoryLimit: 4000,
   skip: name => name.startsWith('.') || name === 'node_modules',
   stop: name => ['build', 'target', 'dist'].includes(name)
 }

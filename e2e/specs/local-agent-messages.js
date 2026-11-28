@@ -303,18 +303,38 @@ async function run() {
     await until(`!${chatBell}`)
     fs.writeFileSync(file('claude-2-suggestion'), '')
 
+    await focusAgent('codex-1')
+    await toggleChat()
+    const codexPane = "document.querySelector('[aria-label=\"codex-1 메시지함\"]')?.closest('.local-terminal-pane')"
+    const codexChat = `${codexPane}?.querySelector('.agent-chat-cover')`
+    const codexChatStatus = `${codexChat}?.querySelector('.agent-chat-status')`
     fs.writeFileSync(file('codex-1-program-status'), 'state=working:app=codex')
-    check('the Codex chip border runs before waiting for a reply', await until(runningTrace(row('codex-1'))))
+    check('the Codex chat and chip borders run before waiting for a reply', await until(`
+      ${runningTrace(row('codex-1'))} && ${runningTrace(codexPane)} &&
+      ${codexChatStatus}?.dataset.status === 'working'
+    `))
     const waiting = cli('codex-1', 'message inbox --wait')
     check('waiting for a reply shows the reply icon and clears the working border', await until(`
       ${row('codex-1')}?.dataset.status === 'reply' && ${border(row('codex-1'))}.animationPlayState === 'paused'
     `))
+    check('the chat shows reply wait while its work effect is hidden', await until(`
+      ${codexChatStatus}?.dataset.status === 'reply' &&
+      ${codexChat}?.querySelector('.agent-chat-reply-progress')?.textContent === '답장 대기…' &&
+      ${codexPane}?.dataset.agentWork === 'idle' && ${border(codexPane)}.opacity === '0'
+    `, 3000))
     const wake = await cli('claude-2', 'message send --to codex-1 --text follow-up')
     check('arriving mail completes the wait and clears the status', (await waiting).messages.some(message => message.id === wake.id) &&
       await until(`${row('codex-1')}?.dataset.status !== 'reply'`))
+    check('the chat work effect resumes after the reply', await until(`
+      ${codexChatStatus}?.dataset.status === 'working' && ${runningTrace(codexPane)}
+    `))
     await cli('codex-1', `message ack --id ${wake.id}`)
     fs.writeFileSync(file('codex-1-program-status'), 'state=idle:app=codex')
     await until(`${row('codex-1')}?.dataset.status === 'idle'`)
+    await js(`${codexChat}?.querySelector('.agent-chat-input').focus()`)
+    await toggleChat()
+    await until(`!${codexChat}`)
+    await focusAgent('claude-2')
 
     const shellId = await js(`document.querySelector('[aria-label="claude-2 메시지함"]').closest('[data-local-shell-id]').dataset.localShellId`)
     const isWorking = () => js(`window.electronAPI.localShellHasWorkingAgent([${JSON.stringify(shellId)}])`)

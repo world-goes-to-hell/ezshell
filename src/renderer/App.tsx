@@ -21,6 +21,7 @@ import type { SharedSession } from './lib/sessionShare'
 import { QuickConnectModal, QuickConnectionConfig } from './components/Modal/QuickConnectModal'
 import { LocalProjectDialog, type LocalProjectTerminal } from './components/Modal/LocalProjectDialog'
 import { OPEN_LOCAL_TERMINAL_EVENT } from './lib/localProjectList'
+import { typeWhenShellSettles } from './lib/gitLogin'
 import { SessionPickerModal } from './components/Modal/SessionPickerModal'
 import { NewTabMenu } from './components/Terminal/NewTabMenu'
 import { TabWorktreeBadge } from './components/Terminal/TabWorktreeBadge'
@@ -60,6 +61,7 @@ import { addScreenRefusal, dragDivider, evenSizes } from './lib/screenPanes'
 import { TabGroupChips } from './components/Terminal/TabGroupChips'
 import { agentKindsByShell, agentsOfLocalTab, openLocalWithAgents } from './lib/restoreAgents'
 import { OPEN_CLAUDE_PROFILE_EVENT, useClaudeProfiles, type OpenClaudeProfile } from './lib/claudeProfiles'
+import { continueUnderClaudeProfile } from './lib/claudeAccountContinue'
 import { useAgentScreenReturnStore } from './stores/agentScreenReturnStore'
 import { useAgentUsageStore } from './stores/agentUsageStore'
 import { UpdateNotification } from './components/Update/UpdateNotification'
@@ -70,6 +72,7 @@ import { DevelopmentTabDots } from './components/Terminal/DevelopmentRunStatus'
 import { changeDevelopmentRun, developmentRunsForTab, useDevelopmentRunEvents, useDevelopmentRuns } from './lib/developmentRun'
 import { TabRenameDialog } from './components/Terminal/TabRenameDialog'
 import { DUPLICATE_TAB_EVENT, OPEN_SNIPPET_MANAGER_EVENT } from './components/Terminal/useTerminalContextMenu'
+import { CLOSE_TAB_EVENT } from './lib/paneGesture'
 import { folderName, RESUME_AGENT_SESSION_EVENT, type ResumeAgentSessionRequest } from './lib/agentHistory'
 import { adoptOrphanLocalShells, keptLocalShells, rememberLocalLayout } from './lib/localShellAdopt'
 import { startAgentSleep } from './stores/agentSleepStore'
@@ -876,11 +879,18 @@ function App() {
   useEffect(() => {
     const onDuplicate = (event: Event) => { void handleDuplicateTab((event as CustomEvent<string>).detail) }
     const onSnippets = () => setSnippetManagerOpen(true)
+    // An Alt+drag scribble over the only pane of a tab (lib/paneGesture.ts)
+    const onCloseTab = (event: Event) => {
+      const id = (event as CustomEvent<unknown>).detail
+      if (typeof id === 'string' && useTerminalStore.getState().terminals.has(id)) void requestCloseTabs([id])
+    }
     window.addEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
     window.addEventListener(OPEN_SNIPPET_MANAGER_EVENT, onSnippets)
+    window.addEventListener(CLOSE_TAB_EVENT, onCloseTab)
     return () => {
       window.removeEventListener(DUPLICATE_TAB_EVENT, onDuplicate)
       window.removeEventListener(OPEN_SNIPPET_MANAGER_EVENT, onSnippets)
+      window.removeEventListener(CLOSE_TAB_EVENT, onCloseTab)
     }
   })
 
@@ -1018,7 +1028,12 @@ function App() {
     if (!unlockedOnce) return
     void useClaudeProfiles.getState().load().catch(() => {})
     const open = async (event: Event) => {
-      const { profileId, shellId } = (event as CustomEvent<OpenClaudeProfile>).detail
+      const { profileId, shellId, mode } = (event as CustomEvent<OpenClaudeProfile>).detail
+      if (mode === 'continue' && shellId) {
+        const switched = await continueUnderClaudeProfile(shellId, profileId).catch(() => ({ ok: false as const, error: undefined }))
+        if (!switched.ok) toast.error('Claude 계정을 바꾸지 못했습니다', switched.error)
+        return
+      }
       const current = useTerminalStore.getState()
       const active = current.activeTerminalId ? current.terminals.get(current.activeTerminalId) : undefined
       try {
@@ -1080,9 +1095,7 @@ function App() {
     }
   }
 
-  // A run preset's server (the card's 로그 / ▶, the crash notice): its tab to the front, made from main's
-  // shell list when the server has none yet (an agent started it, or the tab was closed); with an error
-  // line, scrolled to the first line that has it
+  // Focus the log viewer or attach a new one to the preset shell, including after the run has ended.
   const revealRunShellTab = async ({ shellId, label, errorLine }: RevealRunShell) => {
     const findPane = () => {
       const store = useTerminalStore.getState()
@@ -1096,13 +1109,16 @@ function App() {
     let found = findPane()
     if (!found) {
       const shells = await window.electronAPI.localShellList?.().catch(() => undefined)
-      const shell = shells?.find(item => item.id === shellId && !item.exited)
-      if (!shell) {
-        toast.error('서버의 터미널을 찾지 못했습니다', label)
-        return
-      }
-      addLocalTerminalTab({ id: shell.id, name: shell.name, cwd: shell.cwd ?? undefined }, label)
       found = findPane()
+      if (!found) {
+        const shell = shells?.find(item => item.id === shellId && item.development?.runPreset)
+        if (!shell) {
+          toast.error('서버의 터미널을 찾지 못했습니다', label)
+          return
+        }
+        addLocalTerminalTab({ id: shell.id, name: shell.name, cwd: shell.cwd ?? undefined }, label)
+        found = findPane()
+      }
     }
     if (!found) return
     focusTabPane(useTerminalStore.getState().focusTerminal, found.tabId, found.pane)
@@ -1187,8 +1203,12 @@ function App() {
   })
   useEffect(() => {
     const onOpen = (event: Event) => {
-      const { cwd, agent, workspaceLabel } = (event as CustomEvent<Partial<LocalProjectTerminal> | null>).detail ?? {}
-      void handleOpenLocalTerminal({ cwd, agent, workspaceLabel })
+      const { cwd, agent, workspaceLabel, input } = (event as CustomEvent<Partial<LocalProjectTerminal> & { input?: string } | null>).detail ?? {}
+      void handleOpenLocalTerminal({ cwd, agent, workspaceLabel }).then(tabId => {
+        // A command typed in for the user to run (the Git login of a nested repository, lib/gitLogin.ts): no Enter
+        const shellId = tabId && typeof input === 'string' && !agent ? getLocalPaneShellId(tabId, MAIN_PANE) : null
+        if (shellId) void typeWhenShellSettles(shellId, input!)
+      })
     }
     window.addEventListener(OPEN_LOCAL_TERMINAL_EVENT, onOpen)
     return () => window.removeEventListener(OPEN_LOCAL_TERMINAL_EVENT, onOpen)

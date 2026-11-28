@@ -145,6 +145,45 @@ describe('handing agents over to the app after an update', () => {
     expect(next.agentsOfShell('local:3')).toEqual([])
   })
 
+  // 2026-11-27 user report: the update handed the agents over but the session host started anew, so no
+  // shell came back. The new shells were numbered from local:1 again and the old agents showed on them twice.
+  it('retires the agents whose shells the session host did not bring back', async () => {
+    const { env } = await before()
+    const next = app({ handoffEndpoint: readHandoffEndpoint(files) })
+    await next.ready()
+    next.importHandoff(takeAgentHandoff({ ...files, masterPassword: PASSWORD }))
+    next.retireLostShells([])
+    const old = next.snapshot().agents.find(agent => agent.id === env.EZSHELL_AGENT_ID)
+    // Kept for its messages, but on no shell: a new local:3 does not take it
+    expect(old).toMatchObject({ active: false, status: 'ended', shellId: '' })
+    expect(next.agentsOfShell('local:3')).toEqual([])
+    const after = await rpc({ method: 'inbox', unread: true }, { pipe: env.EZSHELL_AGENT_PIPE, token: env.EZSHELL_AGENT_TOKEN })
+    expect(after.success).toBe(false)
+  })
+
+  it('forgets a lost shell’s agent without messages and keeps the agent of a shell that came back', async () => {
+    const old = app()
+    await old.ready()
+    const lost = old.register('codex', 'local:4', root, {}).env.EZSHELL_AGENT_ID
+    const kept = old.register('claude', 'local:5', root, {}).env.EZSHELL_AGENT_ID
+    const record = old.exportHandoff()
+    saveAgentHandoff({ ...files, record, masterPassword: PASSWORD })
+    old.stop({ handOver: true })
+    leftover.push(record.endpoint.directory)
+    const next = app({ handoffEndpoint: readHandoffEndpoint(files) })
+    await next.ready()
+    next.importHandoff(takeAgentHandoff({ ...files, masterPassword: PASSWORD }))
+    next.retireLostShells(['local:5'])
+    const ids = next.snapshot().agents.map(agent => agent.id)
+    expect(ids).not.toContain(lost)
+    expect(next.agentsOfShell('local:5')).toEqual([kept])
+    // Only the handed-over agents: one this app runs is never retired
+    const own = next.register('claude', 'local:1', root, {}).env.EZSHELL_AGENT_ID
+    next.retireLostShells([])
+    expect(next.agentsOfShell('local:1')).toEqual([own])
+    expect(next.agentsOfShell('local:5')).toEqual([kept])
+  })
+
   it('leaves the handle of a kept shell empty when there is nothing to take', async () => {
     await before()
     const next = app({ handoffEndpoint: readHandoffEndpoint(files) })

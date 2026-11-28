@@ -31,17 +31,24 @@ const { check, finish } = createChecks()
   check('the system pointer is the default: no set and no cursor variables',
     await js(`!document.documentElement.dataset.cursorSet && !document.documentElement.style.getPropertyValue('--ez-cursor-default')`))
   check('no effect canvas while both effects are off', await js(`!document.querySelector('.pointer-effects-canvas')`))
-  check('the shape tab shows all nine pointer sets in one grid without category badges', await js(`
-    document.querySelectorAll('.pointer-settings [aria-label="포인터 모양"] [data-set]').length === 9 &&
+  check('the shape tab shows all eighteen pointer sets in one grid without category badges', await js(`
+    document.querySelectorAll('.pointer-settings [aria-label="포인터 모양"] [data-set]').length === 18 &&
     !/귀염|실용/.test(document.querySelector('.pointer-settings').textContent) &&
     !document.querySelector('.pointer-settings [data-effect]')
   `))
   const previews = `[...document.querySelectorAll('.pointer-settings [data-set] img')]`
   await js(`Promise.all(${previews}.map(img => img.decode().catch(() => null)))`)
   check('each set card previews three pointers from blob: images', await until(`
-    ${previews}.length === 27 && ${previews}.every(img => img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0)
+    ${previews}.length === 54 && ${previews}.every(img => img.src.startsWith('blob:') && img.complete && img.naturalWidth > 0)
   `, 4000), await js(`${previews}.filter(img => !(img.complete && img.naturalWidth > 0)).map(img => img.closest('[data-set]').dataset.set + ':' + img.naturalWidth).slice(0, 6).join(' ')`))
 
+  await pick('[data-set="moon"]')
+  check('a new set can be selected and saved', await until(`
+    document.documentElement.dataset.cursorSet === 'moon' &&
+    ${card('[data-set="moon"]')}.getAttribute('aria-checked') === 'true' &&
+    JSON.parse(localStorage.getItem('pointerPrefs')).set === 'moon'
+  `))
+  await shot('pointer-settings-new-sets')
   await pick('[data-set="paw"]')
   check('choosing a set marks it and sets the root', await until(`document.documentElement.dataset.cursorSet === 'paw' && ${card('[data-set="paw"]')}.getAttribute('aria-checked') === 'true'`))
   const states = ['default', 'pointer', 'text', 'wait', 'progress', 'not-allowed', 'grab', 'grabbing', 'col-resize', 'row-resize', 'crosshair']
@@ -92,11 +99,28 @@ const { check, finish } = createChecks()
   check('the effects tab shows all moving and press effects without category badges', await js(`
     !document.querySelector('.pointer-settings [data-set]') &&
     !/귀염|실용/.test(document.querySelector('.pointer-settings').textContent) &&
-    document.querySelectorAll('.pointer-settings [aria-label="움직일 때 효과"] [data-effect]').length === 10 &&
-    document.querySelectorAll('.pointer-settings [aria-label="누를 때 효과"] [data-effect]').length === 9
+    document.querySelectorAll('.pointer-settings [aria-label="움직일 때 효과"] [data-effect]').length === 14 &&
+    document.querySelectorAll('.pointer-settings [aria-label="누를 때 효과"] [data-effect]').length === 14
   `))
   check('the overlay is still absent before an effect is chosen', await js(`!document.querySelector('.pointer-effects-canvas')`))
-  await pick('[aria-label="움직일 때 효과"] [data-effect="sparkle"]')
+  const painted = canvas => `(() => {
+    const canvas = ${canvas}
+    if (!canvas || !canvas.width || !canvas.height) return false
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
+    for (let i = 3; i < data.length; i += 4 * 7) if (data[i] > 0) return true
+    return false
+  })()`
+  const newMove = '[aria-label="움직일 때 효과"] [data-effect="wind"]'
+  const newClick = '[aria-label="누를 때 효과"] [data-effect="bloom"]'
+  await pick(newMove)
+  check('a new moving effect draws its card preview', await until(painted(`${card(newMove)}.querySelector('canvas')`), 3000))
+  await pick(newClick)
+  check('a new press effect draws its card preview', await until(painted(`${card(newClick)}.querySelector('canvas')`), 3000))
+  check('the two new effects can be saved together', await js(`
+    JSON.parse(localStorage.getItem('pointerPrefs')).move === 'wind' &&
+    JSON.parse(localStorage.getItem('pointerPrefs')).click === 'bloom'
+  `))
+  await shot('pointer-settings-new-effects')
   if (process.platform === 'win32') {
     check('the desktop effect toggle starts off', await until(`document.documentElement.dataset.desktopPointerEffects === 'off'`))
     await outside('켜기')
@@ -111,24 +135,22 @@ const { check, finish } = createChecks()
   } else {
     check('desktop effects settings are only available on Windows', await js(`!${card('[aria-label="다른 프로그램에서도 쓰기"]')}`))
   }
+  await pick('[aria-label="누를 때 효과"] [data-effect="none"]')
+  const sparkleCard = '[aria-label="움직일 때 효과"] [data-effect="sparkle"]'
+  await pick(sparkleCard)
   check('a moving effect brings one overlay canvas that does not take the pointer', await until(`(() => {
     const canvases = document.querySelectorAll('.pointer-effects-canvas')
     return canvases.length === 1 && getComputedStyle(canvases[0]).pointerEvents === 'none'
   })()`, 3000))
   // Sweep over the settings (not a terminal) and look for drawn pixels
   await js(`window.__moves = 0; addEventListener('pointermove', () => window.__moves++, true)`)
-  await js(`${card('[aria-label="움직일 때 효과"]')}.scrollIntoView({ block: 'center' })`)
   await sleep(200)
-  const area = await center(card('[aria-label="움직일 때 효과"]'))
+  const [x] = await center(card('[aria-label="움직일 때 효과"]'))
+  const [, y] = await center(card(sparkleCard))
+  const area = [x, y]
   for (let i = 0; i < 6; i++) await move(area[0] - 220 + i * 70, area[1] - 40 + (i % 2) * 50)
   // The canvas holds no pixels (0×0) while nothing is drawn
-  const drawn = `(() => {
-    const canvas = document.querySelector('.pointer-effects-canvas')
-    if (!canvas || !canvas.width || !canvas.height) return false
-    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data
-    for (let i = 3; i < data.length; i += 4 * 7) if (data[i] > 0) return true
-    return false
-  })()`
+  const drawn = painted("document.querySelector('.pointer-effects-canvas')")
   check('moving the pointer draws particles on the overlay', await until(drawn, 3000), await js(`JSON.stringify({ focus: document.hasFocus(), hidden: document.hidden, w: document.querySelector('.pointer-effects-canvas')?.width, moves: window.__moves, at: ${JSON.stringify(area)} })`))
   await shot('pointer-settings-effects')
   check('the canvas gives its pixels back once the particles are gone', await until(`document.querySelector('.pointer-effects-canvas')?.width === 0`, 4000))

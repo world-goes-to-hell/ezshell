@@ -29,7 +29,7 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
   const draft = drafts[Math.min(step, questions.length - 1)] ?? emptyDraft()
   // The choice whose preview shows: the one pointed at or focused, else the chosen one, else the first
   const [looked, setLooked] = useState<number | null>(null)
-  const shownPreview = question?.preview ? question.options[looked ?? draft.picks[0] ?? 0]?.preview : undefined
+  const shownIndex = looked ?? draft.picks[0] ?? 0
   useEffect(() => setLooked(null), [step])
 
   const toTerminal = () => {
@@ -173,7 +173,17 @@ export function AskQuestionCard({ shellId, item, onTerminal }: { shellId: string
             {!question.preview && <OtherAnswer question={question} draft={draft} onChange={update} problem={problem} armed={armed} canClick={canClick} />}
           </div>
           {question.preview && (
-            <pre className="agent-ask-preview" aria-label="미리보기">{shownPreview || '미리보기가 없는 선택지입니다.'}</pre>
+            // Every preview sits in the same place and the box takes the largest: with the box sized to the
+            // shown one, pointing at another choice changed the card's height, the choices moved under a
+            // pointer that stood still, and the wrong preview stayed (2026-11-27 user report)
+            <div className="agent-ask-preview" role="region" aria-label="미리보기">
+              <div className="agent-ask-preview-stack">
+                {question.options.map((option, index) => (
+                  <pre key={index} className="agent-ask-preview-text" data-shown={index === shownIndex ? 'true' : undefined}
+                    aria-hidden={index === shownIndex ? undefined : true}>{option.preview || '미리보기가 없는 선택지입니다.'}</pre>
+                ))}
+              </div>
+            </div>
           )}
           </div>
           {!direct && (

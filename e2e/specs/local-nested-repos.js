@@ -11,6 +11,26 @@ const parent = path.join(profile, 'git-parent')
 const source = path.join(profile, 'source')
 const git = (cwd, ...args) => execFileSync('git', args, { cwd, windowsHide: true, stdio: 'pipe', encoding: 'utf8' }).trim()
 
+// An HTTPS server on this PC that answers every Git request with 401 (a self-signed certificate made with
+// openssl, Git for Windows ships one); null without openssl
+async function loginServer() {
+  const openssl = ['openssl', 'C:\\Program Files\\Git\\usr\\bin\\openssl.exe', 'C:\\Program Files\\Git\\mingw64\\bin\\openssl.exe']
+    .find(command => { try { execFileSync(command, ['version'], { stdio: 'ignore', windowsHide: true }); return true } catch { return false } })
+  if (!openssl) return null
+  const key = path.join(profile, 'login.key')
+  const cert = path.join(profile, 'login.crt')
+  execFileSync(openssl, ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'],
+    { stdio: 'ignore', windowsHide: true })
+  let count = 0
+  const server = require('node:https').createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (request, response) => {
+    count++
+    response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="fixture"', 'Content-Type': 'text/plain' })
+    response.end('login needed')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  return { port: server.address().port, requests: () => count, close: () => server.close() }
+}
+
 function commit(cwd, filename) {
   fs.writeFileSync(path.join(cwd, filename), filename)
   git(cwd, 'add', '--', filename)
@@ -67,14 +87,20 @@ function fixture() {
     check('Git parent keeps its worktree and recognizes its submodule', await until(
       `[...document.querySelectorAll('.local-project')].some(card => card.dataset.projectFolder === ${JSON.stringify(parent)}
         && card.querySelector('.local-worktree-row') && card.querySelector('.nested-repositories-toggle')?.textContent.includes('1개'))`))
-    check('default sidebar keeps the full preset name and shortens the branch without hiding the pull chip', await until(
+    check('the preset name and actions have their own line above the folder and Git details', await until(
       `(() => {
-        const name = ${preset}?.querySelector('.run-preset-name')
+        const line = ${preset}?.querySelector('.run-preset-main')
+        const name = line?.querySelector('.run-preset-name')
+        const details = ${preset}?.querySelector('.run-preset-details')
+        const folder = details?.querySelector('.run-preset-folder')
         const branch = ${chip('branch')}
         const incoming = ${chip('behind')}
         return name?.textContent === '카탈로그 실행' && name.scrollWidth === name.clientWidth
-          && branch?.title === 'feature/catalog' && branch.querySelector('.nested-repository-branch-label').textContent === 'catalog'
-          && incoming?.textContent === '↓1' && incoming.getBoundingClientRect().right <= ${preset}.getBoundingClientRect().right
+          && !!line.querySelector('[data-action="start"]') && !!line.querySelector('[aria-label="카탈로그 실행 더 보기"]')
+          && details?.contains(branch) && details.contains(incoming) && folder?.textContent === 'services/catalog/'
+          && details.getBoundingClientRect().top >= line.getBoundingClientRect().bottom
+          && branch.title === 'feature/catalog' && incoming.textContent === '↓1'
+          && incoming.getBoundingClientRect().right <= ${preset}.getBoundingClientRect().right
       })()`))
     await js(`${section}.querySelector('.nested-repositories-toggle').click()`)
     const trustSwitch = `${section}?.querySelector('[role="switch"]')`
@@ -150,14 +176,156 @@ function fixture() {
         && ${card}?.querySelector('.nested-repository-summary .nested-repository-branch')?.textContent === 'main'`)
       && git(catalog, 'branch', '--show-current') === 'main')
 
+    await js(`${row('services/catalog')}.querySelector('.nested-repository-open').click()`)
+    const hasShell = name => `(() => {
+      const tab = [...document.querySelectorAll('.terminal-tab[data-tab-id^="local:"]')].find(tab =>
+        tab.querySelector('[data-tab-label]')?.textContent === ${JSON.stringify(name)})
+      return !!tab && [...${card}.querySelectorAll('.local-terms-item')].some(item =>
+        item.dataset.localSessionId === tab.dataset.tabId && item.querySelector('.local-terms-name')?.textContent === ${JSON.stringify(name)})
+    })()`
+    check('a nested repository row names its terminal for the repository folder in the tab and sidebar', await until(hasShell('catalog · main')))
+    await js(`${row('orders')}.querySelector('.nested-repository-more').click()`)
+    if (!await until(`!!${menuItem('로컬 터미널 열기')}`)) throw new Error('Missing repository terminal item')
+    await js(`${menuItem('로컬 터미널 열기')}.click()`)
+    check('another repository on the same branch has its own title when opened via the menu',
+      await until(`${hasShell('orders · main')} && ${hasShell('catalog · main')}`))
+
+    // Smart checkout (2026-11-27 user request): an edit the target branch also changed opens the checkout problem step
+    const fixtureCommit = ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qam']
+    git(catalog, 'config', '--local', 'core.autocrlf', 'false')
+    git(catalog, 'switch', '-q', '-c', 'e2e/conflict')
+    fs.appendFileSync(path.join(catalog, 'initial'), '\nbranch change')
+    git(catalog, ...fixtureCommit, 'conflict')
+    git(catalog, 'switch', '-q', 'main')
     fs.appendFileSync(path.join(catalog, 'initial'), '\nlocal change')
-    await js(`${row('services/catalog')}.querySelector('.nested-repository-ref').click()`)
-    if (!await until(`!!${branch('feature/catalog')}`)) throw new Error('Branch label did not open the branch dialog')
-    await js(`${branch('feature/catalog')}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`)
-    check('switching on a dirty worktree is blocked and leaves the current branch intact', await until(
-      `${branchDialog}?.querySelector('[role="alert"]')?.textContent.includes('수정하거나 스테이징한 파일')`)
+    const dialogButton = label => `[...${branchDialog}.querySelectorAll('button')].find(button => button.textContent === ${JSON.stringify(label)})`
+    const openConflictProblem = async () => {
+      await js(`${row('services/catalog')}.querySelector('.nested-repository-ref').click()`)
+      if (!await until(`!!${branch('e2e/conflict')}`)) throw new Error('Branch label did not open the branch dialog')
+      await js(`${branch('e2e/conflict')}.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`)
+      return until(`${branchDialog}?.querySelector('.nested-checkout-problem[data-step="choose"]')
+        ?.querySelector('.nested-checkout-files')?.textContent === 'initial'
+        && ${branchDialog}.querySelector('.modal-title').textContent.includes('체크아웃 문제')`)
+    }
+    check('an overlapping edit lists the file with force, smart and cancel choices and changes nothing',
+      await openConflictProblem() && !!await js(`!!${dialogButton('강제 체크아웃')} && !!${dialogButton('스마트 체크아웃')}`)
+      && git(catalog, 'branch', '--show-current') === 'main' && git(catalog, 'stash', 'list') === '')
+    await shot('local-nested-repos-checkout-problem')
+    await js(`${dialogButton('체크아웃 안 함')}.click()`)
+    check('checkout cancelled returns to the branch list on the same branch', await until(`!!${branch('e2e/conflict')}`)
       && git(catalog, 'branch', '--show-current') === 'main')
-    await js(`[...${branchDialog}.querySelectorAll('button')].find(button => button.textContent === '취소').click()`)
+    await js(`${dialogButton('취소')}.click()`)
+    await until(`!${branchDialog}`)
+
+    if (!await openConflictProblem()) throw new Error('Checkout problem step did not open again')
+    await js(`${dialogButton('스마트 체크아웃')}.click()`)
+    check('smart checkout switches, applies the edit again and lists the conflict while keeping the stash', await until(
+      `${branchDialog}?.querySelector('.nested-checkout-problem[data-step="done"]')?.textContent.includes('충돌')
+        && ${branchDialog}.querySelector('.nested-checkout-files')?.textContent === 'initial'
+        && ${row('services/catalog')}?.querySelector('.nested-repository-ref')?.textContent.trim() === 'e2e/conflict'`)
+      && git(catalog, 'branch', '--show-current') === 'e2e/conflict'
+      && git(catalog, 'stash', 'list', '--format=%s').includes('ezShell 스마트 체크아웃: main → e2e/conflict')
+      && fs.readFileSync(path.join(catalog, 'initial'), 'utf8').includes('<<<<<<<'))
+    await shot('local-nested-repos-checkout-conflict')
+    await js(`${dialogButton('닫기')}.click()`)
+    await until(`!${branchDialog}`)
+    git(catalog, 'reset', '-q', '--hard')
+    git(catalog, 'switch', '-q', 'main')
+    git(catalog, 'stash', 'clear')
+
+    // Remote addresses (2026-11-27 user request): a pull refused for an http:// remote is fixed from its row
+    const orders = path.join(project, 'orders')
+    const remoteRepo = path.join(profile, 'remote.git')
+    const httpUrl = 'http://git.example.invalid/team/orders.git'
+    fs.rmSync(path.join(orders, 'draft'))
+    git(orders, 'remote', 'set-url', 'origin', httpUrl)
+    await js(`${row('orders')}.querySelector('.nested-repository-more').click()`)
+    if (!await until(`!!${menuItem('최신으로 받기')}`)) throw new Error('Missing repository pull item')
+    await js(`${menuItem('최신으로 받기')}.click()`)
+    const remoteAction = `${row('orders')}?.querySelector('.nested-repository-result-action')`
+    check('a pull refused for an http:// remote offers to change the address', await until(
+      `${row('orders')}?.querySelector('[data-result="failed"]')?.textContent.includes('HTTPS, SSH') && !!${remoteAction}`))
+    await js(`${remoteAction}.click()`)
+    const remoteDialog = 'document.querySelector(".nested-remote-dialog")'
+    const origin = `${remoteDialog}?.querySelector('[data-remote="origin"]')`
+    const addForm = `${remoteDialog}?.querySelector('.nested-remote-add')`
+    const backup = `${remoteDialog}?.querySelector('[data-remote="backup"]')`
+    const button = (scope, label) => `[...(${scope}?.querySelectorAll('button') ?? [])].find(button =>
+      button.textContent.trim() === ${JSON.stringify(label)})`
+    check('the remote dialog shows the address and why fetching refuses it', await until(
+      `${origin}?.querySelector('input')?.value === ${JSON.stringify(httpUrl)} && ${origin}.textContent.includes('받을 수 없음')`))
+    await shot('local-nested-repos-remotes')
+    await js(`${button(origin, 'HTTPS 로 바꾸기')}.click()`)
+    const httpsUrl = httpUrl.replace('http://', 'https://')
+    check('HTTPS 로 바꾸기 fills in the https address', await until(`${origin}.querySelector('input').value === ${JSON.stringify(httpsUrl)}`))
+    await js(`${button(origin, '저장')}.click()`)
+    check('saving writes the address and clears the refusal in the dialog and the row', await until(
+      `${origin}?.textContent.includes('저장했습니다') && !${origin}.textContent.includes('받을 수 없음')
+        && !!${row('orders')} && !${row('orders')}.querySelector('[data-result="failed"]')`)
+      && git(orders, 'config', 'remote.origin.url') === httpsUrl)
+
+    const fill = async (label, text) => {
+      await js(`(() => { const input = ${addForm}.querySelector('[aria-label="${label}"]'); input.focus(); input.select() })()`)
+      await type(text)
+    }
+    await fill('새 원격 이름', 'secret')
+    await fill('새 원격 주소', 'https://user:pw@git.example.invalid/team/orders.git')
+    await js(`${button(addForm, '추가')}.click()`)
+    check('an address with a password is refused', await until(`${addForm}?.textContent.includes('비밀번호가 든 주소')`)
+      && !git(orders, 'remote').split(/\r?\n/).includes('secret'))
+    await fill('새 원격 이름', 'backup')
+    await fill('새 원격 주소', remoteRepo)
+    await js(`${button(addForm, '연결 확인')}.click()`)
+    check('the connection check reaches a remote on this PC before adding it', await until(`${addForm}?.textContent.includes('연결됨 · 브랜치')`, 15000))
+    await js(`${button(addForm, '추가')}.click()`)
+    check('a remote can be added', await until(`!!${backup}`) && git(orders, 'config', 'remote.backup.url') === remoteRepo)
+    await js(`${button(backup, '삭제')}.click()`)
+    check('removing a remote asks for a second press', await until(`!!${button(backup, '한 번 더 누르면 지웁니다')}`)
+      && git(orders, 'remote').split(/\r?\n/).includes('backup'))
+    await js(`${button(backup, '한 번 더 누르면 지웁니다')}.click()`)
+    check('the second press removes the remote', await until(`!${backup}`) && git(orders, 'remote') === 'origin')
+
+    // A server asking for a login Git cannot give with its prompts off (2026-11-27 user report: an https
+    // remote with only the http:// login saved): a Korean notice and 터미널에서 로그인
+    const login = await loginServer()
+    if (login) {
+      try {
+        git(orders, 'config', '--local', 'http.sslVerify', 'false')
+        // Git Credential Manager writes what it detects for a new host to the user's global config
+        // (credential.https://127.0.0.1:<port>.provider); named here, it detects and writes nothing
+        git(orders, 'config', '--local', 'credential.provider', 'generic')
+        const loginUrl = `https://127.0.0.1:${login.port}/team/orders.git`
+        await fill('새 원격 주소', loginUrl)
+        await js(`${button(addForm, '연결 확인')}.click()`)
+        check('a server asking for a login says so in Korean and offers 터미널에서 로그인', await until(
+          `${addForm}?.textContent.includes('Git 로그인이 필요합니다') && !${addForm}.textContent.includes('terminal prompts')
+            && !!${button(addForm, '터미널에서 로그인')}`, 40000), await js(`${addForm}?.textContent`))
+        const shellsBefore = (await js('window.electronAPI.localShellList()')).map(shell => shell.id)
+        // Git Credential Manager looks at the server first: count from here, so a command run by itself shows
+        const requestsBefore = login.requests()
+        await js(`${button(addForm, '터미널에서 로그인')}.click()`)
+        const typed = `git ls-remote --heads -- ${loginUrl}`
+        check('터미널에서 로그인 closes the dialog and types the command in a terminal of the repository, without running it', await until(`(async () => {
+          if (${remoteDialog}) return false
+          const shells = await window.electronAPI.localShellList()
+          if (shells.length !== ${shellsBefore.length + 1}) return false
+          // The new one: an orders terminal was opened earlier in this spec
+          const shell = shells.find(item => !${JSON.stringify(shellsBefore)}.includes(item.id))
+          if (shell?.cwd?.toLowerCase() !== ${JSON.stringify(orders.toLowerCase())}) return false
+          const state = shell && await window.electronAPI.localShellAttach(shell.id)
+          // PowerShell colors the command and wraps it at the terminal's width
+          const screen = state ? state.backlog.replace(/\\x1b\\[[0-9;?]*[ -\\/]*[@-~]/g, '').replace(/[\\r\\n]/g, '') : ''
+          return screen.includes(${JSON.stringify(typed)}) && !screen.includes('could not read Username')
+        })()`, 20000) && login.requests() === requestsBefore, `requests ${requestsBefore} → ${login.requests()}`)
+        await shot('local-nested-repos-git-login')
+      } finally {
+        login.close()
+      }
+    } else {
+      console.log('SKIP  login check: openssl not found to make a test certificate')
+      await js(`${button(remoteDialog, '닫기')}.click()`)
+    }
+    if (!await until(`!${remoteDialog}`)) throw new Error('The remote dialog did not close')
 
     await js(`${row('services/catalog')}.querySelector('.nested-repository-more').click()`)
     if (!await until(`!!${menuItem('따로 로컬 작업으로 올리기')}`)) throw new Error('Missing repository promotion')

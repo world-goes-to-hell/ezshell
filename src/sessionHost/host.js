@@ -3,7 +3,7 @@
 // ELECTRON_RUN_AS_NODE, so the installer can replace every file of the app while the shells go on.
 //
 // One client at a time (the app), on a named pipe, after a hello with the token the app gave in the
-// environment. When the client goes away the shells end with it, as they did inside the app, unless the
+// environment. A second app is let in only after the first said `keep`; until then it is turned away. When the client goes away the shells end with it, as they did inside the app, unless the
 // app said `keep` first (quitting to install an update): then they wait for the next app for that long.
 //
 // Self-contained on purpose: only Node's own modules and the node-pty folder it is given, both inside
@@ -170,9 +170,16 @@ function createSessionHost({ spawn, token, killTree, exit, now = Date.now, setTi
         if (!message || typeof message !== 'object') return socket.destroy()
         if (!greeted) {
           if (message.type !== 'hello' || !sameToken(message.token, token)) return socket.destroy()
+          // Another app may take over only from one quitting to install an update (it said keep). A second
+          // app that found the pipe while the first still works in it (a dev run sharing the user data
+          // folder) took every shell away from it, and they all ended when it quit (2026-11-27 user report).
+          if (client && !client.destroyed && keepUntil === 0) {
+            send(socket, { type: 'busy' })
+            return socket.destroy()
+          }
           greeted = true
           clearTimer(helloTimer)
-          // The newest app is the one that counts: an older connection is let go
+          // The next app is the one that counts: the connection of the app that is quitting is let go
           const previous = client
           client = socket
           if (previous) previous.destroy()

@@ -619,13 +619,22 @@
   width: min(860px, calc(100vw - 32px));
 }
 
+/* Why the AI asks: read before allowing, so it stands out from the plain fields (2026-11-27 user request) */
 .mcp-approval-purpose {
   margin: 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-primary);
+  font-weight: 500;
+  line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-height: 96px;
+  max-height: 140px;
   overflow: auto;
 }
+.mcp-approval-purpose + .mcp-approval-requested { margin-top: 5px; }
 
 .mcp-approval-requested {
   margin-top: 2px;

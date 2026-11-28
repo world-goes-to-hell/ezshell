@@ -132,11 +132,11 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
    * before saving are the safety net); the backup list offers the file's Git revisions instead.
    */
   /** `revealLine`: a new window opens at that line (a link "README.md:187" in the agent chat) */
-  function registerLocal({ root, path: filePath, label, mode, compareHead = false, revealLine = null }) {
+  function registerLocal({ root, path: filePath, label, mode, compareHead = false, revealLine = null, previewText = false }) {
     if (!localFiles || typeof filePath !== 'string' || !filePath) throw new DocumentError(MESSAGES.gone)
     if (mode !== 'edit' && mode !== 'preview') throw new DocumentError(MESSAGES.gone)
-    // Text opens in the editor (looking and changing in one place); the preview is for images and PDFs
-    if (previewKind(nodePath.basename(filePath)).kind === 'text') mode = 'edit'
+    // Explorer sends large text files to a read-only preview so the editor limit does not block viewing.
+    if (!previewText && previewKind(nodePath.basename(filePath)).kind === 'text') mode = 'edit'
     const existing = [...docs.values()].find(doc => doc.local && doc.local.path === filePath && doc.mode === mode)
     if (existing) return { docId: existing.docId, existing: true }
     if (docs.size >= MAX_OPEN_DOCUMENTS) throw new DocumentError(MESSAGES.tooMany)
@@ -162,6 +162,10 @@ function createRemoteDocuments({ openSftp, serverOf, backups, containerLogs = nu
       return { kind: 'text', editable: true, path: seen.path, content: seen.content, canWrite }
     }
     const { kind, mime } = previewKind(nodePath.basename(doc.local.path))
+    if (kind === 'text') {
+      const { path, text, truncated, size } = await read.readTextPreview(doc.local.path)
+      return { kind, editable: false, path, content: text, truncated, size }
+    }
     const media = await read.readMedia(doc.local.path)
     return { kind, mime, path: media.path, size: media.size, data: media.data }
   }

@@ -723,6 +723,87 @@ describe('wake an idle agent with unread messages', () => {
     await vi.waitFor(() => expect(write.mock.calls).toEqual([[paste], ['\r']]))
   })
 
+  it('pastes once into a starting Claude that shows its notice late, then presses Enter (2026-11-27 user report)', async () => {
+    // A new session drew its empty composer before it read input: the notice came 2 s later, and a second
+    // paste had gone in meanwhile, leaving the notice twice with no Enter
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup()
+      state.busy = true
+      state.running = false
+      state.unknown = true
+      state.ids.push('first')
+      wake.writeOutput(paintedClaudeDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      for (let i = 0; i < 8; i++) {
+        wake.writeOutput(paintedClaudeDraft(''))
+        await vi.advanceTimersByTimeAsync(400)
+      }
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.writeOutput(paintedClaudeDraft(PROMPT))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('submits a notice that went in twice instead of leaving it in the composer', async () => {
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup()
+      state.ids.push('first')
+      wake.writeOutput(paintedClaudeDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.writeOutput(paintedClaudeDraft(PROMPT + PROMPT))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('keeps one paste through focus reports while a new Codex has not drawn it yet (2026-11-27 user report)', async () => {
+    // The tab's terminal answers Codex's focus tracking (?1004h) with ESC[O / ESC[I as windows change focus.
+    // Each report dropped the attempt, and the still empty composer got the notice again: five in a row, no Enter.
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup('codex')
+      state.ids.push('first')
+      wake.writeOutput(codexDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      for (const report of ['\x1b[O', '\x1b[I', '\x1b[O\x1b[I', '\x1b]11;rgb:0000/0000/0000\x07', '\x1b[?62;22c']) {
+        wake.userInput(report)
+        wake.writeOutput(codexDraft(''))
+        await vi.advanceTimersByTimeAsync(300)
+      }
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.writeOutput(codexDraft(PROMPT))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste], ['\r']])
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not paste again over keys the user typed before the first paste showed', async () => {
+    vi.useFakeTimers()
+    try {
+      const { write, state } = setup('codex')
+      state.ids.push('first')
+      wake.writeOutput(codexDraft(''))
+      await vi.advanceTimersByTimeAsync(200)
+      expect(write.mock.calls).toEqual([[paste]])
+      wake.userInput('a')
+      for (let i = 0; i < 6; i++) {
+        wake.writeOutput(codexDraft(''))
+        await vi.advanceTimersByTimeAsync(400)
+      }
+      expect(write.mock.calls).toEqual([[paste]])
+      // Both arrive: the user's key with our notice is the user's draft now, never submitted
+      wake.writeOutput(codexDraft(PROMPT + 'a'))
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(write.mock.calls).toEqual([[paste]])
+    } finally { vi.useRealTimers() }
+  })
+
   it('does not wake an unknown agent while its screen keeps changing', async () => {
     const { write, state } = setup('codex')
     state.busy = true
@@ -1136,6 +1217,29 @@ describe('a line sent from the chat view (submitText)', () => {
     await expect(sent).resolves.toEqual({ ok: true })
     expect(rawWrite.mock.calls.at(-1)).toEqual(['\r'])
     expect(write).not.toHaveBeenCalled()
+  })
+
+  it('ends a Claude line that ends with a backslash with a space, so Enter submits it (2026-11-27 user report)', async () => {
+    // Claude Code turns `\` + Enter into a new line (it removed the backslash and kept the draft); with a space
+    // after it Enter submits, and the transcript records the line without the space (checked with Claude Code 2.1.332)
+    const { rawWrite } = chatSetup()
+    wake.writeOutput(claudeDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText('버그인가\\')
+    await vi.waitFor(() => expect(rawWrite.mock.calls).toEqual([['\x1b[200~버그인가\\ \x1b[201~']]))
+    wake.writeOutput(claudeDraft('버그인가\\ '))
+    await expect(sent).resolves.toEqual({ ok: true })
+    expect(rawWrite.mock.calls.at(-1)).toEqual(['\r'])
+  })
+
+  it('pastes a Codex line that ends with a backslash as it is (Codex submits it)', async () => {
+    const { rawWrite } = chatSetup('codex')
+    wake.writeOutput(codexDraft(''))
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const sent = wake.submitText('버그인가\\')
+    await vi.waitFor(() => expect(rawWrite.mock.calls).toEqual([['\x1b[200~버그인가\\\x1b[201~']]))
+    wake.writeOutput(codexDraft('버그인가\\'))
+    await expect(sent).resolves.toEqual({ ok: true })
   })
 
   it('also sends while the agent works (Claude takes the line for its next turn)', async () => {
@@ -2385,6 +2489,48 @@ describe('the agent\'s prompt with choices, answered from the chat view', () => 
     ].join('\r\n'))
     await settle()
     expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', options: [], usesTerminalInput: true })
+  })
+
+  it('reads Claude’s question without a notice box drawn over the dialog’s top right (2026-11-27)', async () => {
+    promptSetup('claude')
+    // The box's bottom border lies on the blank row under the tab strip (this PC's ko-ui plugin notice):
+    // read as the question's first row, the chat matched no question and showed no card
+    wake.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '대화 내용'.padEnd(56) + '╭' + '─'.repeat(20) + '╮',
+      '─'.repeat(60) + '│ ko-ui' + ' '.repeat(14) + '│',
+      '←  ☐ 과일  ☐ 색  ✔ Submit  →'.padEnd(60) + '│ 새 항목 8개 발견   │',
+      ' '.repeat(60) + '╰' + '─'.repeat(20) + '╯',
+      '│ 어떤 과일을 넣을까요?', '',
+      '❯ 1. Apple', '  2. Banana', '  3. Type something.', '─'.repeat(40),
+      '  4. Chat about this', '', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', options: [], usesTerminalInput: true })
+    // Lower, the box covers the end of the question's row: its text is not known (the chat's card takes the
+    // waiting question), rather than a piece the chat could match to no question
+    wake.writeOutput('\x1b[2J\x1b[H' + [
+      '─'.repeat(40) + ' '.repeat(20) + '╭' + '─'.repeat(20) + '╮',
+      '←  ☐ 과일  ☐ 색  ✔ Submit  →'.padEnd(60) + '│ ko-ui' + ' '.repeat(14) + '│',
+      '│ 어떤 과일을 넣을까요? 고른 과일은 모두 바구니에 담아 ╰' + '─'.repeat(20) + '╯',
+      '│ 보냅니다.', '',
+      '❯ 1. Apple', '  2. Banana', '  3. Type something.', '─'.repeat(40),
+      '  4. Chat about this', '', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    const covered = createAgentInboxWake({ kind: 'claude', cols: 100, rows: 24, pendingMessages: () => [], isWorking: () => true, write: vi.fn(() => true) })
+    covered.writeOutput('\x1b[?2004h\x1b[2J\x1b[H' + [
+      '─'.repeat(40) + ' '.repeat(20) + '╭' + '─'.repeat(20) + '╮',
+      '←  ☐ 과일  ☐ 색  ✔ Submit  →'.padEnd(60) + '│ ko-ui' + ' '.repeat(14) + '│',
+      '│ 어떤 과일을 넣을까요? 고른 과일은 모두 바구니에 담아 ╰' + '─'.repeat(20) + '╯',
+      '│ 보냅니다.', '',
+      '❯ 1. Apple', '  2. Banana', '  3. Type something.', '─'.repeat(40),
+      '  4. Chat about this', '', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+    ].join('\r\n'))
+    await settle()
+    expect(covered.approvalPrompt()).toMatchObject({ question: null, options: [], usesTerminalInput: true })
+    // The question read before the box came stays (the same dialog)
+    expect(wake.approvalPrompt()).toMatchObject({ question: '어떤 과일을 넣을까요?', usesTerminalInput: true })
+    covered.close?.()
   })
 
   it('recognizes Claude’s question with previews though its full-width rows wrap into the next ones', async () => {

@@ -147,3 +147,83 @@
 .nested-branch-message, .nested-branch-error { padding: 6px 0; font-size: 12px; }
 .nested-branch-message { color: var(--text-muted); }
 .nested-branch-error { color: var(--error-text, var(--error)); }
+
+/* Checkout problem step (NestedCheckoutProblem.tsx): three buttons need more room than the branch list */
+.modal-content.nested-branch-dialog:has(.nested-checkout-problem) { width: min(520px, calc(100vw - 32px)); }
+.nested-checkout-text { margin: 0 0 10px; font-size: 12px; line-height: 1.55; color: var(--text-primary); overflow-wrap: anywhere; }
+.nested-checkout-text code { font-family: var(--font-mono, monospace); font-size: 11px; }
+.nested-checkout-files {
+  max-height: min(30vh, 200px);
+  overflow: auto;
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 4px 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.nested-checkout-files li {
+  padding: 3px 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* IntelliJ keeps the risky choice apart, on the left */
+.nested-checkout-actions .nested-checkout-force { margin-right: auto; }
+
+.modal-content.nested-remote-dialog { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.nested-remote-list { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 8px; }
+.nested-remote {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+.nested-remote-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.nested-remote-problem {
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--error, #d74d51) 14%, transparent);
+  color: var(--error-text, var(--error, #d74d51));
+  font-size: 10px;
+}
+.nested-remote-field { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; }
+.nested-remote-field > span { color: var(--text-secondary); }
+.nested-remote-field input { min-width: 0; font-family: var(--font-mono, monospace); font-size: 12px; }
+.nested-remote-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 6px; }
+/* One size for both kinds: the global .btn-primary adds a top margin and has no border, .btn-secondary has one */
+.nested-remote-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 28px;
+  min-width: 64px;
+  margin: 0;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+.nested-remote-actions .btn-secondary { border-color: var(--border-color); }
+.nested-remote-actions button:disabled { opacity: 0.45; cursor: default; }
+.nested-remote-remove:focus-visible, .nested-remote-remove:hover { color: var(--error-text, var(--error, #d74d51)); }
+.nested-remote-note { margin: 0; font-size: 11px; overflow-wrap: anywhere; color: var(--text-muted); }
+.nested-remote-note[data-kind="ok"] { color: var(--accent); }
+.nested-remote-note[data-kind="error"] { color: var(--error-text, var(--error, #d74d51)); }
+.nested-repository-result-action {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}

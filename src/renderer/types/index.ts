@@ -180,7 +180,7 @@ export interface ConfigDefinition {
 export type RemoteFileLoaded = RemoteFileLoadedBase & (
   | { kind: 'text'; editable: true; content: string; canWrite: boolean; draft?: RemoteFileDraft }
   /** `pace: 'command'`: each look runs a command on the server (a container's log), so looks are further apart */
-  | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow: RemoteFileFollow; pace?: 'command' }
+  | { kind: 'text'; editable: false; content: string; truncated: boolean; size: number; follow?: RemoteFileFollow; pace?: 'command' }
   | { kind: 'image' | 'pdf'; mime: string; size: number; data: Uint8Array<ArrayBuffer> }
 )
 
@@ -858,6 +858,28 @@ export interface NestedRepositoryBranch {
   current: boolean
 }
 
+/** How to switch over local edits Git refused to overwrite (src/ipc/nestedCheckout.js) */
+export type NestedCheckoutMode = 'smart' | 'force'
+
+/** smart: edits applied again (conflicts listed, stash kept when any) · force: edits kept only as a stash backup */
+export type NestedCheckoutResult =
+  | { kind: 'smart'; conflicts: string[]; stash?: string }
+  | { kind: 'force'; stash?: string }
+
+/** A remote in the repository's own config (password parts shown as ***) */
+export interface NestedRepositoryRemote {
+  name: string
+  url: string
+  pushUrl?: string
+  /** Why fetching refuses this address (http://, a share, ...) */
+  problem?: string
+  hasPassword?: boolean
+}
+
+export type NestedRepositoryRemoteResult =
+  | { success: true; remotes: NestedRepositoryRemote[]; status: NestedRepositoryStatus }
+  | { success: false; error: string }
+
 interface NestedRepositoryRequest {
   project: string
   root: string
@@ -893,6 +915,7 @@ export interface LocalDevelopmentTask {
 
 export interface LocalDevelopmentRun {
   taskId: string
+  runPreset?: true
   name: string
   label: string
   status: 'starting' | 'running' | 'stopping' | 'exited'
@@ -1029,6 +1052,8 @@ export type LogEncoding = 'auto' | 'utf-8' | 'ms949'
 /** A server of an Eclipse workspace (Servers/<name>-config, its .launch VM arguments), to fill a Tomcat preset */
 export interface WorkspaceServer {
   name: string
+  source?: string
+  webapp?: string
   port?: number
   vmArgs?: string
   contextPath?: string
@@ -1406,6 +1431,7 @@ declare global {
       localShellOpen?: (options: { cols: number; rows: number; cwd?: string; agent?: AgentChatProvider; resume?: string; replacementFor?: string; restoring?: true; claudeProfileId?: string; reuseClaudeProfile?: true }) => Promise<{ success: true; id: string; name: string; cwd?: string; reused?: true } | { success: false; error: string }>
       claudeProfilesList: () => Promise<ClaudeProfilesResult>
       claudeProfileSave: (request: { id?: string; name: string }) => Promise<ClaudeProfilesResult>
+      claudeProfileSwitchInPlace?: (request: { shellId: string; profileId: string }) => Promise<{ success: true; id: string; name: string; cwd?: string } | { success: false; error: string }>
       onLocalAgentRequestOpened: (callback: (opened: { id: string; name: string; cwd: string; workspaceLabel: string }) => void) => () => void
       localProjectInspect: (folder: string) => Promise<({ success: true } & LocalProjectInfo) | { success: false; error: string }>
       localProjectDevelopmentTasks: (folder: string) => Promise<{ success: true; tasks: LocalDevelopmentTask[] } | { success: false; error: string }>
@@ -1420,8 +1446,18 @@ declare global {
         Promise<{ success: true; results: NestedRepositoryPullResult[] } | { success: false; error: string }>
       localNestedRepositoryBranches?: (request: NestedRepositoryRequest) =>
         Promise<{ success: true; branches: NestedRepositoryBranch[] } | { success: false; error: string }>
-      localNestedRepositorySwitchBranch?: (request: NestedRepositoryRequest & { branch: Pick<NestedRepositoryBranch, 'name' | 'remote'> }) =>
-        Promise<{ success: true; status: NestedRepositoryStatus } | { success: false; error: string }>
+      localNestedRepositorySwitchBranch?: (request: NestedRepositoryRequest & {
+        branch: Pick<NestedRepositoryBranch, 'name' | 'remote'>; mode?: NestedCheckoutMode
+      }) => Promise<{ success: true; status: NestedRepositoryStatus; checkout?: NestedCheckoutResult }
+        | { success: true; localChanges: string[] } | { success: false; error: string }>
+      localNestedRepositoryRemotes?: (request: NestedRepositoryRequest) =>
+        Promise<{ success: true; remotes: NestedRepositoryRemote[] } | { success: false; error: string }>
+      localNestedRepositorySetRemote?: (request: NestedRepositoryRequest & {
+        remote: { name: string; url?: string; pushUrl?: string; add?: boolean }
+      }) => Promise<NestedRepositoryRemoteResult>
+      localNestedRepositoryRemoveRemote?: (request: NestedRepositoryRequest & { name: string }) => Promise<NestedRepositoryRemoteResult>
+      localNestedRepositoryTestRemote?: (request: NestedRepositoryRequest & { target: { name?: string; url?: string } }) =>
+        Promise<{ success: true; heads: number } | { success: false; error: string }>
       onLocalNestedRepositoriesProgress?: (callback: (progress: { requestId: string; result: NestedRepositoryPullResult }) => void) => () => void
       localProjectDevelopmentStart: (options: { folder: string; id: string; cols: number; rows: number; includeSource: boolean; install: boolean }) =>
         Promise<{ success: true; id: string; name: string; cwd: string; label: string; development: LocalDevelopmentRun } | { success: false; error: string }>
@@ -1518,6 +1554,8 @@ declare global {
         { ok: true; kind: 'text'; text: string } | AgentChatImagesResult
       >
       agentChatPickImages?: (shellId: string) => Promise<AgentChatImagesResult>
+      /** Pictures dropped on the chat, by their paths on this PC (main checks them again) */
+      agentChatDropImages?: (shellId: string, paths: string[]) => Promise<AgentChatImagesResult>
       agentChatPreviewImage?: (shellId: string, imageId: string) => Promise<{ ok: true; data: Uint8Array<ArrayBuffer> } | { ok: false; error: string }>
       agentChatRemoveImage?: (shellId: string, imageId: string) => void
       agentChatSend?: (shellId: string, text: string, imageIds?: string[], retry?: { acceptedAt: number; transcriptId: string; ignoreIds: string[] }, forceToken?: string) => Promise<AgentChatSendResult>
@@ -1603,7 +1641,8 @@ declare global {
       /** Reads the Eclipse settings of a folder of the project (.classpath, .settings) for a Tomcat preset */
       runPresetEclipseImport?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { draft?: EclipseImportDraft; notes?: string[] }>
       /** Picks an Eclipse workspace folder (main's chooser) and reads its servers */
-      runPresetWorkspaceServers?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; workspace?: string; servers?: WorkspaceServer[] }>
+      runPresetWorkspaceServers?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; workspace?: string; servers?: WorkspaceServer[]; notes?: string[] }>
+      runPresetIdeServers?: (worktreeFolder: string, relative: string, pickFile?: boolean) => Promise<RunPresetResult & { cancelled?: true; servers?: WorkspaceServer[]; notes?: string[] }>
       /** Picks an existing context.xml (JNDI) for a Tomcat preset */
       runPresetChooseContextXml?: (worktreeFolder: string) => Promise<RunPresetResult & { cancelled?: true; contextXml?: string; label?: string }>
       runPresetChooseFolder?: (worktreeFolder: string, relative: string) => Promise<RunPresetResult & { cancelled?: true; relative?: string }>

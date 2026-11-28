@@ -13,6 +13,8 @@
 // Before the last key the answers on that review are compared with the ones chosen; anything unexpected
 // stops the run where it is (the window then hands the pane to the terminal).
 
+const { splitOverlayBox, withoutOverlayBox, piecesInOrder } = require('./cliOverlayBox.js')
+
 const compact = text => String(text ?? '').replace(/\s/g, '')
 const POINTER = '[❯›>▶]'
 const OPTION_ROW = new RegExp(`^\\s*(${POINTER})?\\s*(\\d{1,2})\\.\\s+(?:\\[([ ✔xX✓])\\]\\s+)?(.*?)\\s*$`, 'u')
@@ -22,10 +24,12 @@ const TAB_STRIP = /^\s*(?:←\s+)?[☐☒✔]\s+\S/u
 const RULE = /^\s*─{8,}/u
 const REVIEW = /^\s*Review your answers\s*$/i
 const UNANSWERED = /Some questions are unanswered/i
+const MORE_LINES = /^\s*[↑↓]\s*\d+\s+more\s+lines?\s*$/iu
 // The hint once the "Type something" row takes typing ("ctrl+g to edit in Notepad"): keys sent before it are lost
 const EDIT_HINT = /\bctrl\+g to edit\b/i
 const SUBMIT_ANSWERS = new RegExp(`^\\s*(${POINTER})?\\s*1\\.\\s+Submit answers\\s*$`, 'u')
-const bare = line => String(line ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
+// A plugin's notice box over the top right goes first (its "╰──╯" on a blank row read as the question)
+const bare = line => withoutOverlayBox(line).replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
 // A question whose choices have previews draws the chosen one's preview in a box right of the choices:
 // "❯ 1. Icon card      ┌────┐" / "    (Recommended)   │ … │". Its rows are cut where the box starts.
 const PREVIEW_TOP = /\S\s{2,}┌─+┐\s*$/u
@@ -33,11 +37,15 @@ const PREVIEW_PART = /\s{2,}[┌│└].*$/u
 
 /**
  * The question screen: { question (its text, spaces removed; null when a low pane scrolled it off),
- * options: [{ number, checked, text }], pointer (number, 'move' on Next / Submit, or null) }, or null
+ * options: [{ number, checked, text }], pointer (number, 'move' on Next / Submit, or null) }, or null.
+ * When a notice box covers the end of the question's rows (cliOverlayBox.js): `cut`, and `parts`, the
+ * text each row still shows; a choice whose row it covers has `cut` too (its label shows in part).
  */
 function readQuestionScreen(lines) {
   const preview = lines.some(line => PREVIEW_TOP.test(String(line ?? '')))
-  const rows = lines.map(line => bare(preview ? String(line ?? '').replace(PREVIEW_PART, '') : line))
+  const shown = lines.map(line => (preview ? String(line ?? '').replace(PREVIEW_PART, '') : line))
+  const rows = shown.map(bare)
+  const covered = shown.map((line, index) => splitOverlayBox(line).cut && Boolean(rows[index].trim()))
   // A narrow pane folds the hint over two rows ("… navigate ·" / "Esc to cancel")
   const hint = rows.findLastIndex((row, index) => HINT.test(row) || HINT.test(row.trimEnd() + ' ' + (rows[index + 1] ?? '').trim()))
   if (hint < 0) return null
@@ -49,7 +57,9 @@ function readQuestionScreen(lines) {
     ? rows.findIndex((row, index) => index > strip && index < hint && OPTION_ROW.test(row))
     : rows.slice(0, hint).findLastIndex(row => OPTION_ROW.exec(row)?.[2] === '1')
   if (firstOption < 0) return null
-  const question = strip >= 0 ? rows.slice(strip + 1, firstOption).filter(row => row.trim()).join('') : null
+  const questionRows = strip >= 0 ? rows.slice(strip + 1, firstOption).filter(row => row.trim()) : null
+  const question = questionRows ? questionRows.join('') : null
+  const cut = strip >= 0 && covered.slice(strip + 1, firstOption).some(Boolean)
   const options = []
   let pointer = null
   let last = null
@@ -58,7 +68,7 @@ function readQuestionScreen(lines) {
     const option = OPTION_ROW.exec(row)
     const move = MOVE_ROW.exec(row)
     if (option) {
-      last = { number: Number(option[2]), checked: option[3] === undefined ? null : option[3] !== ' ', text: option[4] }
+      last = { number: Number(option[2]), checked: option[3] === undefined ? null : option[3] !== ' ', text: option[4], ...(covered[index] ? { cut: true } : {}) }
       options.push(last)
       if (option[1]) pointer = last.number
     } else if (move) {
@@ -71,31 +81,60 @@ function readQuestionScreen(lines) {
       last.more = (last.more ?? '') + row.trim()
     }
   }
-  return { question: question === null ? null : compact(question), options, pointer, preview }
+  return { question: question === null ? null : compact(question), options, pointer, preview,
+    ...(cut ? { cut: true, parts: questionRows.map(compact) } : {}) }
 }
 
-/** The review before submitting: { entries: [{ question, answer }] (spaces removed), unanswered, ready }, or null */
+/**
+ * The review before submitting: { entries: [{ question, answer }] (spaces removed), unanswered, ready }, or
+ * null. An entry a notice box covers in part has `cut`, and the pieces its rows still show.
+ */
 function readReview(lines) {
   const rows = lines.map(bare)
-  const start = rows.findLastIndex(row => REVIEW.test(row))
-  if (start < 0) return null
+  let start = rows.findLastIndex(row => REVIEW.test(row))
+  if (start < 0) {
+    // A low pane scrolled the heading off: the review fills the pane then, its "↑ N more lines" right above
+    // Submit (real CLI at 80×16). A partly shown first entry has no "●" and is not read: then it is missed.
+    const submit = rows.findIndex(row => SUBMIT_ANSWERS.test(row))
+    if (submit < 1 || !MORE_LINES.test(rows[submit - 1]) || !rows[submit - 1].includes('↑')) return null
+  }
   const entries = []
   let current = null
   let ready = false
-  for (const row of rows.slice(start + 1)) {
+  for (let index = start + 1; index < rows.length; index++) {
+    const row = rows[index]
     const submit = SUBMIT_ANSWERS.exec(row)
     if (submit) { ready = Boolean(submit[1]); break }
+    // A low pane says what scrolled off ("↑ 2 more lines"): not text of an answer (a hidden entry is missed
+    // by the caller's check of each question)
+    if (MORE_LINES.test(row)) continue
     const question = /^\s*●\s+(.*)$/u.exec(row)
     const answer = /^\s*→\s*(.*)$/u.exec(row)
-    if (question) { current = { question: compact(question[1]), answer: null }; entries.push(current) }
-    else if (answer && current) current.answer = compact(answer[1])
-    else if (current && row.trim()) {
-      if (current.answer === null) current.question += compact(row)
-      else current.answer += compact(row)
+    let piece = null
+    if (question) {
+      current = { question: compact(question[1]), answer: null, questionParts: [compact(question[1])], answerParts: [], cut: false }
+      entries.push(current)
+    } else if (answer && current) {
+      current.answer = compact(answer[1])
+      current.answerParts.push(current.answer)
+    } else if (current && row.trim()) {
+      piece = compact(row)
+      if (current.answer === null) { current.question += piece; current.questionParts.push(piece) }
+      else { current.answer += piece; current.answerParts.push(piece) }
     }
+    if (current && row.trim() && splitOverlayBox(lines[index]).cut) current.cut = true
   }
-  return { entries, unanswered: rows.some(row => UNANSWERED.test(row)), ready }
+  return {
+    entries: entries.map(({ question, answer, questionParts, answerParts, cut }) => (cut ? { question, answer, cut, questionParts, answerParts } : { question, answer })),
+    unanswered: rows.some(row => UNANSWERED.test(row)), ready
+  }
 }
+
+// A review entry for a question: its text, or the pieces left showing by a notice box over it
+const reviewQuestionFits = (entry, question) => (entry.cut
+  ? piecesInOrder(entry.questionParts, compact(question.question)) : entry.question === compact(question.question))
+const reviewAnswerFits = (entry, expected) => (entry.cut
+  ? entry.answer !== null && piecesInOrder(entry.answerParts, compact(expected)) : sameAnswer(entry.answer, expected))
 
 /** What the review shows for an answer: the picked labels in the list's order, then the typed text */
 function reviewText(question, answer) {
@@ -135,15 +174,23 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
   }
   const arrow = direction => (appCursor() ? '\x1bO' : '\x1b[') + direction
   // Beside a preview box a long label goes on in the next row (there are no descriptions there)
+  // A choice a notice box covers in part shows the beginning of its label
   const labelsMatch = (screen, question) => question.options.every((option, index) => {
     const row = screen.options.find(entry => entry.number === index + 1)
-    return compact(row?.text) === compact(option.label) || (screen.preview && compact((row?.text ?? '') + (row?.more ?? '')) === compact(option.label))
+    return compact(row?.text) === compact(option.label) || (screen.preview && compact((row?.text ?? '') + (row?.more ?? '')) === compact(option.label)) ||
+      (row?.cut === true && Boolean(compact(row.text)) && compact(option.label).startsWith(compact(row.text)))
   })
   // The question on screen: by its text (a notice drawn over the dialog's right side may follow it on
-  // the row), or, once a low pane scrolled the text off, by a list of choices unique in the dialog.
+  // the row), or, once a low pane scrolled the text off, by a list of choices unique in the dialog. A notice
+  // box over the end of its rows leaves pieces of the text: those in order and the choices, for one
+  // question of the batch only.
   const on = question => {
     const screen = readQuestionScreen(lines())
     if (!screen) return null
+    if (screen.cut) {
+      const fits = candidate => piecesInOrder(screen.parts, compact(candidate.question)) && labelsMatch(screen, candidate)
+      return fits(question) && activeQuestions.filter(fits).length === 1 ? screen : null
+    }
     if (screen.question !== null) return screen.question.startsWith(compact(question.question)) ? screen : null
     const matches = activeQuestions.filter(candidate => labelsMatch(screen, candidate))
     return matches.length === 1 && matches[0] === question ? screen : null
@@ -231,8 +278,9 @@ function createClaudeQuestionAnswerer({ lines, write, hold = () => {}, appCursor
     const now = readReview(lines())
     if (!now || now.unanswered || !now.ready) return 'mismatch'
     for (const [index, question] of questions.entries()) {
-      const entry = now.entries.find(item => item.question === compact(question.question))
-      if (!entry || !sameAnswer(entry.answer, reviewText(question, answers[index]))) return 'mismatch'
+      // One entry for the question, and (pieces of a covered one fitting several) for it alone
+      const entries = now.entries.filter(item => reviewQuestionFits(item, question) && questions.filter(other => reviewQuestionFits(item, other)).length === 1)
+      if (entries.length !== 1 || !reviewAnswerFits(entries[0], reviewText(question, answers[index]))) return 'mismatch'
     }
     if (!write('1')) return 'changed'
     return (await until(() => !readReview(lines()))) ? null : 'stuck'

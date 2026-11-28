@@ -99,6 +99,28 @@ describe('createLocalShells', () => {
     } finally { shells.closeAll(); rmSync(root, { recursive: true, force: true }) }
   })
 
+  it('keeps a run preset and its backlog after closing the log tab', async () => {
+    const cwd = realpathSync(tmpdir())
+    const stopDevelopmentProcess = vi.fn(async pty => pty.exit({ exitCode: 0 }))
+    const { shells, ptys } = setup({ cwd, stopDevelopmentProcess })
+    const regular = shells.open({ cwd })
+    const task = { id: 'preset:fixture', name: 'Server', cwd, command: 'run-app', runPreset: true }
+    const { id } = await shells.openDevelopmentTask(task, {})
+    ptys[1].emit('server output\r\n')
+
+    shells.close(regular.id, { keepRunPreset: true })
+    shells.close(id, { keepRunPreset: true })
+    expect(shells.attach(regular.id)).toBeNull()
+    expect(shells.attach(id)).toMatchObject({ exited: false, backlog: expect.stringContaining('server output') })
+    expect(stopDevelopmentProcess).not.toHaveBeenCalled()
+
+    await shells.changeDevelopmentTask(id, task.id, 'stop')
+    shells.close(id, { keepRunPreset: true })
+    expect(shells.attach(id)).toMatchObject({ exited: true, backlog: expect.stringContaining('server output') })
+    shells.close(id)
+    expect(shells.attach(id)).toBeNull()
+  })
+
   it('drains active development cleanup and refuses a new launch during shutdown', async () => {
     const cwd = realpathSync(tmpdir())
     const { shells, ptys, spawn } = setup({ stopDevelopmentProcess: async pty => pty.exit({ exitCode: 0 }) })

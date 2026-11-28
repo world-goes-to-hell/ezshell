@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import { pathKey } from '../lib/localWorkspaceTree'
 import { readLocalProjects } from '../lib/localProjectList'
-import type { NestedRepositoryBranch, NestedRepositoryGroup, NestedRepositoryPullResult, NestedRepositoryStatus } from '../types'
+import type { NestedCheckoutMode, NestedCheckoutResult, NestedRepositoryBranch, NestedRepositoryGroup, NestedRepositoryPullResult, NestedRepositoryStatus } from '../types'
 import { toast } from './toastStore'
 
 interface Project {
@@ -230,21 +230,44 @@ function updatedRepositories(state: State, id: string, updates: NestedRepository
   return { groups, summaries: { ...state.summaries, [project]: summary } }
 }
 
-export async function switchNestedRepositoryBranch(root: string, folder: string, branch: NestedRepositoryBranch) {
+/**
+ * Switch a nested repository's branch. Without `mode`, Git may refuse over local edits: the result then
+ * lists those files and nothing changed. `mode` switches with the edits (smart) or past them (force).
+ */
+export async function switchNestedRepositoryBranch(root: string, folder: string, branch: NestedRepositoryBranch,
+  mode?: NestedCheckoutMode): Promise<{ localChanges: string[] } | { checkout?: NestedCheckoutResult }> {
   const id = pathKey(root)
   const group = useNestedRepositories.getState().groups[id]
   if (!group) throw new Error('등록된 로컬 작업을 찾을 수 없습니다.')
   const project = pathKey(group.project)
   revisions.set(project, ++sequence)
   const result = await window.electronAPI.localNestedRepositorySwitchBranch?.({
-    project: group.project, root, folder, branch: { name: branch.name, remote: branch.remote }
+    project: group.project, root, folder, branch: { name: branch.name, remote: branch.remote }, ...(mode && { mode })
   })
   if (!result?.success) throw new Error(result?.error ?? '브랜치를 바꾸지 못했습니다.')
+  if ('localChanges' in result) return { localChanges: result.localChanges }
   revisions.set(project, ++sequence)
   useNestedRepositories.setState(state => {
     const progress = state.progress[id] ?? {}
     return {
       ...updatedRepositories(state, id, [result.status]),
+      progress: { ...state.progress, [id]: Object.fromEntries(Object.entries(progress).filter(([key, item]) =>
+        key !== folder || pullPending(item))) }
+    }
+  })
+  return { checkout: result.checkout }
+}
+
+/** A repository read again after its remotes changed: the old fetch or pull failure no longer applies */
+export function showNestedRepositoryStatus(root: string, folder: string, status: NestedRepositoryStatus) {
+  const id = pathKey(root)
+  const group = useNestedRepositories.getState().groups[id]
+  if (!group) return
+  revisions.set(pathKey(group.project), ++sequence)
+  useNestedRepositories.setState(state => {
+    const progress = state.progress[id] ?? {}
+    return {
+      ...updatedRepositories(state, id, [status]),
       progress: { ...state.progress, [id]: Object.fromEntries(Object.entries(progress).filter(([key, item]) =>
         key !== folder || pullPending(item))) }
     }

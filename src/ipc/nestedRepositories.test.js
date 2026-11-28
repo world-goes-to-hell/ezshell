@@ -113,7 +113,7 @@ test('reports branch, upstream and changes for actual repositories and only fast
   expect(await git(path.join(project, 'behind'), 'rev-parse', 'HEAD')).toBe(previous)
 }, 30000)
 
-test('discovers real repositories at two levels and recognizes a submodule within a Git parent', async () => {
+test('discovers real repositories at three levels and recognizes a submodule within a Git parent', async () => {
   const fixture = await fixtureDirectory()
   const project = path.join(fixture, 'work')
   await fs.mkdir(project)
@@ -121,20 +121,20 @@ test('discovers real repositories at two levels and recognizes a submodule withi
   await git(fixture, 'init', '-b', 'main', 'source')
   await commit(path.join(fixture, 'source'), 'initial')
   await git(project, '-c', 'protocol.file.allow=always', 'submodule', 'add', '../source', 'module')
-  for (const name of ['build', 'area/valid', 'area/folder/too-deep', '.hidden/repo', 'build/repo', 'target/repo', 'dist/repo', 'node_modules/repo']) {
+  for (const name of ['build', 'area/valid', 'area/folder/third', 'area/folder/sub/too-deep', '.hidden/repo', 'build/repo', 'target/repo', 'dist/repo', 'node_modules/repo']) {
     const folder = path.join(project, name)
     await fs.mkdir(folder, { recursive: true })
     await git(folder, 'init', '-b', 'main')
   }
   await fs.symlink(path.join(fixture, 'source'), path.join(project, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
   const paths = await discover(project)
-  expect(paths.map(folder => path.relative(project, folder).split(path.sep).join('/'))).toEqual(['build', 'module', 'area/valid'])
+  expect(paths.map(folder => path.relative(project, folder).split(path.sep).join('/'))).toEqual(['build', 'module', 'area/valid', 'area/folder/third'])
   const { repo } = await readWorkspaceGit(project)
-  expect(repo.nestedRepositories).toContain(path.join(project, 'area', 'folder', 'too-deep'))
+  expect(repo.nestedRepositories).toContain(path.join(project, 'area', 'folder', 'sub', 'too-deep'))
   expect(repo.nestedRepositories).toContain(path.join(project, 'build', 'repo'))
   const worker = createNestedRepositories({ discover })
   const [{ repositories }] = await worker.status(project, [project], 'local', check)
-  expect(repositories.map(state => state.folder)).toEqual(['build', 'module', 'area/valid'])
+  expect(repositories.map(state => state.folder)).toEqual(['build', 'module', 'area/valid', 'area/folder/third'])
   for (let index = 0; index < 55; index++) await fs.mkdir(path.join(project, `capped-${index}`, '.git'), { recursive: true })
   expect(await discover(project)).toHaveLength(50)
 }, 15000)
@@ -201,6 +201,32 @@ test('keeps repositories with unreadable status visible and explains ownership e
   expect(statuses.ownership.error).toBe('이 폴더의 소유자가 달라 Git이 읽기를 거부했습니다.')
   expect(statuses.timeout.error).toContain('제한 시간')
   expect(statuses.lock.error).toHaveLength(500)
+})
+
+// 2026-11-27 user report: the remote moved from http:// to https://, where no login was saved, and the
+// check showed Git Credential Manager's English lines as they came
+test('says in Korean that a Git login is needed when the server asks for one', async () => {
+  const project = await fixtureDirectory()
+  const stderr = {
+    missing: "warning: missing OAuth configuration for speciesgit.coreit.co.kr - see https://aka.ms/gcm/gitlab for more information\n" +
+      "fatal: Cannot prompt because user interactivity has been disabled.\n" +
+      "fatal: could not read Username for 'https://speciesgit.coreit.co.kr': terminal prompts disabled",
+    denied: "remote: HTTP Basic: Access denied\nfatal: Authentication failed for 'https://git.example.invalid/x.git/'",
+    other: 'fatal: unable to access: Could not resolve host: git.example.invalid'
+  }
+  await Promise.all(Object.keys(stderr).map(name => fs.mkdir(path.join(project, name, '.git'), { recursive: true })))
+  const worker = createNestedRepositories({ discover, runGit: async (directory, args) => {
+    if (args[0] === 'rev-parse') return directory
+    throw Object.assign(new Error(), { stderr: stderr[path.basename(directory)] })
+  } })
+  const [{ repositories }] = await worker.status(project, [project], 'local', check)
+  const statuses = Object.fromEntries(repositories.map(item => [item.folder, item]))
+  for (const name of ['missing', 'denied']) {
+    expect(statuses[name].error).toMatch(/^Git 로그인이 필요합니다\. /)
+    expect(statuses[name].error).toContain('https 주소에 쓰이지 않습니다')
+    expect(statuses[name].error).not.toMatch(/OAuth|terminal prompts/)
+  }
+  expect(statuses.other.error).toContain('Could not resolve host')
 })
 
 test('blocks risky configuration during automatic refresh and prompts before a manual update', async () => {
@@ -524,7 +550,94 @@ test('lists current and remote-only branches offline and switches from detached 
   expect(nestedGit.gitEnvironment({ inherited: {} })).toHaveProperty('GIT_ALLOW_PROTOCOL', '')
 }, 15000)
 
-test('blocks dirty and in-progress checkouts and protects untracked files when switching branches', async () => {
+// main and other share `initial`; `shared` has five lines and other changed line 5.
+async function smartCheckoutFixture() {
+  const project = await fixtureDirectory()
+  const directory = path.join(project, 'service')
+  await git(project, 'init', '-b', 'main', directory)
+  await git(directory, 'config', '--local', 'core.autocrlf', 'false')
+  await commit(directory, 'initial')
+  const shared = path.join(directory, 'shared')
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive\n')
+  await git(directory, 'add', 'shared')
+  await git(directory, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'shared')
+  await git(directory, 'switch', '-c', 'other')
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on other\n')
+  await git(directory, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-am', 'other')
+  await git(directory, 'switch', 'main')
+  const worker = createNestedRepositories({ discover })
+  const switchTo = (name, mode) => worker.switchBranch(project, 'service', { name }, check, mode && { mode })
+  return { project, directory, shared, switchTo }
+}
+const stashes = directory => git(directory, 'stash', 'list', '--format=%s')
+
+test('carries changes the target branch does not touch and reports overlapping ones without changing anything', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(path.join(directory, 'initial'), 'edited')
+  expect(await switchTo('other')).toMatchObject({ branch: 'other', changed: 1 })
+  expect(await fs.readFile(path.join(directory, 'initial'), 'utf8')).toBe('edited')
+  expect(await switchTo('main')).toMatchObject({ branch: 'main' })
+
+  await fs.writeFile(shared, 'one edited\ntwo\nthree\nfour\nfive\n')
+  expect(await switchTo('other')).toEqual({ localChanges: ['shared'] })
+  await git(directory, 'add', 'shared')
+  expect(await switchTo('other')).toEqual({ localChanges: ['shared'] })
+  expect(await git(directory, 'branch', '--show-current')).toBe('main')
+  expect(await fs.readFile(shared, 'utf8')).toBe('one edited\ntwo\nthree\nfour\nfive\n')
+  expect(await stashes(directory)).toBe('')
+}, 15000)
+
+test('smart checkout puts the changes aside, switches and applies them again', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(shared, 'one edited\ntwo\nthree\nfour\nfive\n')
+  await fs.writeFile(path.join(directory, 'notes'), 'untracked stays')
+  expect(await switchTo('other', 'smart')).toMatchObject({ branch: 'other', checkout: { kind: 'smart', conflicts: [] } })
+  expect(await fs.readFile(shared, 'utf8')).toBe('one edited\ntwo\nthree\nfour\nfive on other\n')
+  expect(await fs.readFile(path.join(directory, 'notes'), 'utf8')).toBe('untracked stays')
+  expect(await stashes(directory)).toBe('')
+}, 15000)
+
+test('smart checkout keeps the stash and lists files when applying the changes conflicts', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on main\n')
+  const result = await switchTo('other', 'smart')
+  expect(result).toMatchObject({ branch: 'other', checkout: { kind: 'smart', conflicts: ['shared'] } })
+  expect(result.checkout.stash).toMatch(/^ezShell 스마트 체크아웃: main → other/)
+  expect(await stashes(directory)).toContain('ezShell 스마트 체크아웃: main → other')
+  expect(await fs.readFile(shared, 'utf8')).toContain('<<<<<<<')
+}, 15000)
+
+test('smart checkout restores the changes on the original branch when the switch itself fails', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await git(directory, 'switch', 'other')
+  await commit(directory, 'collision')
+  await git(directory, 'switch', 'main')
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on main\n')
+  await git(directory, 'add', 'shared')
+  await fs.writeFile(path.join(directory, 'collision'), 'keep my file')
+  await expect(switchTo('other', 'smart')).rejects.toThrow('추적하지 않는 파일을 덮어씁니다')
+  expect(await git(directory, 'branch', '--show-current')).toBe('main')
+  expect(await git(directory, 'diff', '--cached', '--name-only')).toBe('shared')
+  expect(await fs.readFile(shared, 'utf8')).toBe('one\ntwo\nthree\nfour\nfive on main\n')
+  expect(await fs.readFile(path.join(directory, 'collision'), 'utf8')).toBe('keep my file')
+  expect(await stashes(directory)).toBe('')
+}, 15000)
+
+test('force checkout switches to the target version and keeps the discarded changes as a stash backup', async () => {
+  const { directory, shared, switchTo } = await smartCheckoutFixture()
+  await fs.writeFile(shared, 'one\ntwo\nthree\nfour\nfive on main\n')
+  await fs.writeFile(path.join(directory, 'notes'), 'untracked stays')
+  const result = await switchTo('other', 'force')
+  expect(result).toMatchObject({ branch: 'other', checkout: { kind: 'force' } })
+  expect(await git(directory, 'status', '--porcelain', '--untracked-files=no')).toBe('')
+  expect(result.checkout.stash).toMatch(/^ezShell 강제 체크아웃 백업: main → other/)
+  expect(await fs.readFile(shared, 'utf8')).toBe('one\ntwo\nthree\nfour\nfive on other\n')
+  expect(await fs.readFile(path.join(directory, 'notes'), 'utf8')).toBe('untracked stays')
+  expect(await stashes(directory)).toContain('ezShell 강제 체크아웃 백업: main → other')
+  await expect(switchTo('main', 'sideways')).rejects.toThrow('체크아웃 방식')
+}, 15000)
+
+test('blocks in-progress checkouts and protects untracked files when switching branches', async () => {
   const project = await fixtureDirectory()
   const directory = path.join(project, 'service')
   await git(project, 'init', '-b', 'main', directory)
@@ -534,11 +647,6 @@ test('blocks dirty and in-progress checkouts and protects untracked files when s
   await git(directory, 'switch', 'main')
   const worker = createNestedRepositories({ discover })
   const switchBranch = () => worker.switchBranch(project, 'service', { name: 'other' }, check)
-  await fs.writeFile(path.join(directory, 'initial'), 'edited')
-  await expect(switchBranch()).rejects.toThrow('수정하거나 스테이징한 파일')
-  await git(directory, 'add', 'initial')
-  await expect(switchBranch()).rejects.toThrow('수정하거나 스테이징한 파일')
-  await git(directory, 'restore', '--source=HEAD', '--staged', '--worktree', '--', 'initial')
 
   for (const marker of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'rebase-merge', 'sequencer']) {
     const file = path.join(directory, '.git', marker)
@@ -593,4 +701,79 @@ test('requests confirmation before a branch switch with a local filter configura
   expect(confirmSettings).toHaveBeenCalledWith({ directory, keys: ['filter.fixture.smudge'] })
   allow = true
   expect(await switchBranch()).toMatchObject({ branch: 'other' })
+}, 15000)
+
+test('lists and changes remotes with the same address checks as fetching', async () => {
+  const fixture = await fixtureDirectory()
+  const project = path.join(fixture, 'work')
+  const directory = path.join(project, 'service')
+  const bare = path.join(fixture, 'remote.git')
+  await git(fixture, 'init', '--bare', '-b', 'main', bare)
+  await git(fixture, 'init', '-b', 'main', directory)
+  await commit(directory, 'initial')
+  await git(bare, 'fetch', directory, 'main:main')
+  await git(directory, 'remote', 'add', 'origin', 'http://git.example.invalid/team/service.git')
+  await git(directory, 'config', 'remote.origin.pushurl', 'git@git.example.invalid:team/service.git')
+  await git(directory, 'remote', 'add', 'mirror', 'https://user:secret@git.example.invalid/team/service.git')
+  const commands = []
+  const worker = createNestedRepositories({ discover, runGit: (cwd, args, options) => {
+    commands.push({ args, options })
+    return nestedGit.git(cwd, args, options)
+  } })
+
+  const listed = await worker.remotes(project, 'service', check)
+  expect(listed).toEqual([
+    { name: 'origin', url: 'http://git.example.invalid/team/service.git', pushUrl: 'git@git.example.invalid:team/service.git',
+      problem: expect.stringContaining('HTTPS, SSH') },
+    { name: 'mirror', url: 'https://user:***@git.example.invalid/team/service.git', hasPassword: true }
+  ])
+  expect(JSON.stringify(listed)).not.toContain('secret')
+  await expect(worker.remotes(project, '../remote.git', check)).rejects.toThrow('발견된 하위 저장소')
+
+  const change = remote => worker.setRemote(project, 'service', remote, check)
+  await expect(change({ name: 'origin', url: 'http://git.example.invalid/other.git' })).rejects.toThrow('HTTPS, SSH')
+  await expect(change({ name: 'origin', url: 'https://user:pass@git.example.invalid/x.git' })).rejects.toThrow('비밀번호')
+  await expect(change({ name: 'origin', url: '\\\\server\\share\\repo.git' })).rejects.toThrow('UNC')
+  await expect(change({ name: 'origin', url: '--upload-pack=calc' })).rejects.toThrow('원격 주소')
+  await expect(change({ name: 'unknown', url: 'https://git.example.invalid/x.git' })).rejects.toThrow('목록')
+  await expect(change({ name: '-x', url: bare, add: true })).rejects.toThrow('원격 이름')
+  await expect(change({ name: 'mirror', url: bare, add: true })).rejects.toThrow('이미 있는')
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('http://git.example.invalid/team/service.git')
+
+  const changed = await change({ name: 'origin', url: 'https://git.example.invalid/team/service.git', pushUrl: '' })
+  expect(changed.remotes[0]).toEqual({ name: 'origin', url: 'https://git.example.invalid/team/service.git' })
+  expect(changed.status).toMatchObject({ folder: 'service', branch: 'main' })
+  expect(await git(directory, 'config', '--get-all', 'remote.origin.pushurl').catch(() => '')).toBe('')
+  await change({ name: 'origin', pushUrl: 'ssh://git@git.example.invalid/team/service.git' })
+  expect(await git(directory, 'config', 'remote.origin.pushurl')).toBe('ssh://git@git.example.invalid/team/service.git')
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('https://git.example.invalid/team/service.git')
+
+  const added = await change({ name: 'backup', url: bare, add: true })
+  expect(added.remotes.map(remote => remote.name)).toEqual(['origin', 'mirror', 'backup'])
+  expect(await worker.testRemote(project, 'service', { url: bare }, check)).toEqual({ heads: 1 })
+  expect(await worker.testRemote(project, 'service', { name: 'backup' }, check)).toEqual({ heads: 1 })
+  await expect(worker.testRemote(project, 'service', { url: 'http://git.example.invalid/x.git' }, check)).rejects.toThrow('HTTPS, SSH')
+  await expect(worker.testRemote(project, 'service', { name: 'unknown' }, check)).rejects.toThrow('목록')
+  expect(commands.filter(command => command.options?.network).map(command => command.args[0])).toEqual(['ls-remote', 'ls-remote'])
+
+  const removed = await worker.removeRemote(project, 'service', { name: 'mirror' }, check)
+  expect(removed.remotes.map(remote => remote.name)).toEqual(['origin', 'backup'])
+  await expect(worker.removeRemote(project, 'service', { name: 'mirror' }, check)).rejects.toThrow('목록')
+}, 20000)
+
+test('asks to confirm risky repository settings before changing a remote', async () => {
+  const project = await fixtureDirectory()
+  const directory = path.join(project, 'service')
+  await git(project, 'init', '-b', 'main', directory)
+  await commit(directory, 'initial')
+  await git(directory, 'remote', 'add', 'origin', 'http://git.example.invalid/service.git')
+  await git(directory, 'config', '--local', 'filter.fixture.smudge', 'git')
+  let allow = false
+  const worker = createNestedRepositories({ discover, confirmSettings: async () => allow })
+  const change = () => worker.setRemote(project, 'service', { name: 'origin', url: 'https://git.example.invalid/service.git' }, check)
+  await expect(change()).rejects.toThrow('저장소 설정 확인 필요')
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('http://git.example.invalid/service.git')
+  allow = true
+  await change()
+  expect(await git(directory, 'config', 'remote.origin.url')).toBe('https://git.example.invalid/service.git')
 }, 15000)

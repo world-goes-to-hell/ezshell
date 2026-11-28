@@ -249,63 +249,61 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
       onClick={() => { if (state.shellId) void showLog() }}
       title={state.shellId ? `${preset.name} · 로그 보기` : preset.name} data-reload={state.reload && reload ? state.reload.status : undefined}>
       <div className="run-preset-main">
-      {step !== undefined && step >= 0 && <span className="run-start-step" aria-label={`${step + 1}단계`}>{step + 1}</span>}
-      <span className="run-preset-kind" data-kind={kind} aria-hidden="true"><KindIcon size={11} /></span>
-      <span className="run-preset-name">{preset.name}</span>
-      <NestedRepositoryRunChips root={folder} relative={preset.relative} runningSince={state.status === 'running' && (!preset.hotReload || preset.hotReload === 'off') ? state.startedAt : undefined} />
-      {note
-        ? <span className="run-preset-note" role="status">{note}</span>
-        : state.status === 'idle' || state.status === 'stopped'
-          ? <span className="run-preset-folder">{runFolderLabel(preset.relative)}</span>
-          // Nothing to show while running: a spacer that cancels its gap (the row is tight beside the state and four buttons)
-          : <span className="run-preset-spacer" aria-hidden="true" />}
-      {pills.length > 0 && (
-        <span className="run-preset-state">
-          {(state.status === 'starting' || state.status === 'preparing') && <span className="run-preset-spin" aria-hidden="true" />}
-          {pills.map(pill => pill.errors
-            // "오류 20" as a warning sign and the count: the row has no room for the word beside the port
-            ? <button key={pill.text} type="button" className="run-preset-pill is-count" data-kind={pill.kind} aria-label={pill.text}
-                onClick={event => { event.stopPropagation(); void showLog(true) }} title={`${pill.text} · 첫 오류 줄로 가기`}>
-                <RiErrorWarningFill size={10} aria-hidden="true" />{pill.text.replace(/^\D+/, '')}
-              </button>
-            : pill.kind === 'port' && state.address
-              ? <button key={pill.text} type="button" className="run-preset-pill" data-kind={pill.kind} aria-label={`${preset.name} 브라우저로 열기 ${pill.text}`}
-                  onClick={press('open')} title={`브라우저로 열기 · ${state.address}`}>{pill.text}</button>
-              : <span key={pill.text} className="run-preset-pill" data-kind={pill.kind}>{pill.text}</span>)}
-        </span>
-      )}
-      {buttons.map(button => {
-        const { label, Icon } = BUTTONS[button]
-        const shown = crashed && button === 'restart' ? '다시 실행' : label
-        return (
-          <button key={button} type="button" className="run-preset-btn" data-action={button} onClick={press(button)}
-            data-emphasis={button === 'restart' && reload?.restart ? 'true' : undefined}
-            title={button === 'restart' && reload?.restart ? `${shown} · 바뀐 내용을 적용하려면 재기동이 필요합니다` : shown} aria-label={`${preset.name} ${shown}`}>
-            <Icon size={13} aria-hidden="true" />
-          </button>
-        )
-      })}
-      <DropdownMenu.Root modal={false}>
-        <DropdownMenu.Trigger asChild>
-          <button type="button" className="run-preset-btn" title="더 보기" aria-label={`${preset.name} 더 보기`} onClick={event => event.stopPropagation()}>
-            <RiMoreFill size={13} aria-hidden="true" />
-          </button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          {/* A portal too: a picked item's click must not reach the row (which opens the log) */}
-          <DropdownMenu.Content className="terminal-menu sidebar-popover" side="bottom" align="end" sideOffset={4} collisionPadding={8}
-            onClick={event => event.stopPropagation()}>
-            <DropdownMenu.Item className="terminal-menu-item" onSelect={onEdit}><RiEditLine size={15} aria-hidden="true" /> 수정</DropdownMenu.Item>
-            {typeof window.electronAPI.runPresetDiagnosis === 'function' && (
-              <DropdownMenu.Item className="terminal-menu-item" onSelect={() => setDiagnosing(true)}>
-                <RiStethoscopeLine size={15} aria-hidden="true" /> 실행 진단
-              </DropdownMenu.Item>
-            )}
-            <DropdownMenu.Separator className="terminal-menu-separator" />
-            <DropdownMenu.Item className="terminal-menu-item run-presets-danger" onSelect={() => void remove()}><RiDeleteBinLine size={15} aria-hidden="true" /> 삭제</DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+        <span className="run-preset-kind" data-kind={kind} aria-hidden="true"><KindIcon size={11} /></span>
+        <span className="run-preset-name">{preset.name}</span>
+        {buttons.map(button => {
+          const { label, Icon } = BUTTONS[button]
+          const shown = crashed && button === 'restart' ? '다시 실행' : label
+          return (
+            <button key={button} type="button" className="run-preset-btn" data-action={button} onClick={press(button)}
+              data-emphasis={button === 'restart' && reload?.restart ? 'true' : undefined}
+              title={button === 'restart' && reload?.restart ? `${shown} · 바뀐 내용을 적용하려면 재기동이 필요합니다` : shown} aria-label={`${preset.name} ${shown}`}>
+              <Icon size={13} aria-hidden="true" />
+            </button>
+          )
+        })}
+        <DropdownMenu.Root modal={false}>
+          <DropdownMenu.Trigger asChild>
+            <button type="button" className="run-preset-btn" title="더 보기" aria-label={`${preset.name} 더 보기`} onClick={event => event.stopPropagation()}>
+              <RiMoreFill size={13} aria-hidden="true" />
+            </button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            {/* A portal too: a picked item's click must not reach the row (which opens the log) */}
+            <DropdownMenu.Content className="terminal-menu sidebar-popover" side="bottom" align="end" sideOffset={4} collisionPadding={8}
+              onClick={event => event.stopPropagation()}>
+              <DropdownMenu.Item className="terminal-menu-item" onSelect={onEdit}><RiEditLine size={15} aria-hidden="true" /> 수정</DropdownMenu.Item>
+              {typeof window.electronAPI.runPresetDiagnosis === 'function' && (
+                <DropdownMenu.Item className="terminal-menu-item" onSelect={() => setDiagnosing(true)}>
+                  <RiStethoscopeLine size={15} aria-hidden="true" /> 실행 진단
+                </DropdownMenu.Item>
+              )}
+              <DropdownMenu.Separator className="terminal-menu-separator" />
+              <DropdownMenu.Item className="terminal-menu-item run-presets-danger" onSelect={() => void remove()}><RiDeleteBinLine size={15} aria-hidden="true" /> 삭제</DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
+      <div className="run-preset-details">
+        {step !== undefined && step >= 0 && <span className="run-start-step" aria-label={`${step + 1}단계`}>{step + 1}</span>}
+        <NestedRepositoryRunChips root={folder} relative={preset.relative} runningSince={state.status === 'running' && (!preset.hotReload || preset.hotReload === 'off') ? state.startedAt : undefined} />
+        {note
+          ? <span className="run-preset-note" role="status">{note}</span>
+          : (state.status === 'idle' || state.status === 'stopped') && <span className="run-preset-folder">{runFolderLabel(preset.relative)}</span>}
+        {pills.length > 0 && (
+          <span className="run-preset-state">
+            {(state.status === 'starting' || state.status === 'preparing') && <span className="run-preset-spin" aria-hidden="true" />}
+            {pills.map(pill => pill.errors
+              ? <button key={pill.text} type="button" className="run-preset-pill is-count" data-kind={pill.kind} aria-label={pill.text}
+                  onClick={event => { event.stopPropagation(); void showLog(true) }} title={`${pill.text} · 첫 오류 줄로 가기`}>
+                  <RiErrorWarningFill size={10} aria-hidden="true" />{pill.text.replace(/^\D+/, '')}
+                </button>
+              : pill.kind === 'port' && state.address
+                ? <button key={pill.text} type="button" className="run-preset-pill" data-kind={pill.kind} aria-label={`${preset.name} 브라우저로 열기 ${pill.text}`}
+                    onClick={press('open')} title={`브라우저로 열기 · ${state.address}`}>{pill.text}</button>
+                : <span key={pill.text} className="run-preset-pill" data-kind={pill.kind}>{pill.text}</span>)}
+          </span>
+        )}
       </div>
       {failureReason && (typeof window.electronAPI.runPresetDiagnosis === 'function'
         ? <button type="button" className="run-preset-failure-line" title={failureReason}
@@ -326,8 +324,7 @@ function RunPresetRow({ folder, preset, state, now, step, batch, onEdit }: {
           <RunSuggestionsDialog folder={folder} presetId={preset.id} presetName={preset.name} proposals={proposals} onClose={() => setDiagnosing(false)} />
         </span>
       )}
-      {/* Hot reload: its own line under the row while it is on (beside the state there is no room in the
-          sidebar's width), kept from watching to the result so the row does not jump at each save */}
+      {/* Keep the hot reload line from watching to the result so the row does not jump at each save. */}
       {reload && (
         <div className="run-preset-reload-line">
           <RiFlashlightLine size={10} aria-hidden="true" />

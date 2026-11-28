@@ -6,6 +6,7 @@ const { isAgentPickerScreen } = require('./agentPicker.js')
 const { PROMPT, BUSY_PROMPT, REMIND_PROMPT } = require('./agentInboxPrompts.js')
 const { claudeQueueVisible, claudeLoginStage } = require('../agentChat/commandScreen.js')
 const { isCodexHookTrustScreen } = require('./codexHookLaunch.js')
+const { splitOverlayBox, withoutOverlayBox } = require('./cliOverlayBox.js')
 const STOP_WAKE_TIMEOUT = 15_000
 const STOP_WAKE_THINKING_RECHECK = 5000
 const STOP_WAKE_MAX_WAIT = 120_000
@@ -34,6 +35,9 @@ const CLAUDE_CLEAR_DRAFT = '\x15'.repeat(29) + '\x0b'.repeat(29)
 // input once its empty composer has stayed unchanged this long (three fresh agents never woke)
 const QUIET_MS = 1500
 const submitKey = data => /^(?:\r|\n|\x1b\[13(?:;1)?u)$/.test(data)
+// What the tab's terminal answers by itself, not keys: focus reports (the CLI's ?1004h), device attributes,
+// OSC colour replies, mode and keyboard-flag reports, DCS replies. They leave the composer alone.
+const TERMINAL_REPORTS = /^(?:\x1b\[[IO]|\x1b\[[?>][\d;]*c|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[\?[\d;]*\$y|\x1b\[\?\d*u|\x1bP[^\x1b]*\x1b\\)+$/
 const compact = text => text.replace(/\s/g, '')
 const CODEX_STATUS_FOOTER = /(?:^|\s)\d{1,3}% context left(?:\s*·\s*⚠\uFE0F?\s+\d+ warnings?\s*·\s*f2 to view)?\s*$/iu
 // All whitespace has already been removed, including visual line breaks inside a Claude chip.
@@ -123,15 +127,19 @@ function claudeQuestionPrompt(rows, bare, bottom, previous) {
   if (tabs < 0 && firstChoice < 0) return null
 
   const lines = []
+  let covered = false
   for (let row = firstChoice - 1; row > tabs; row--) {
     const text = bare(row).trim()
     if (isClaudeRule(rows[row]) || (lines.length && !text)) break
     if (!text) continue
     // If the heading is cropped, only use the visibly marked question, never preceding log output.
     if (tabs < 0 && !/^\s*[│┃|]/u.test(rows[row])) break
+    if (splitOverlayBox(rows[row]).cut) covered = true
     lines.unshift(text)
   }
-  const question = lines.join(' ').slice(0, 1000)
+  // A notice box over the end of its rows (cliOverlayBox.js) leaves a piece of the question that matches
+  // none: not known then (the chat's card takes the waiting question), or as read before the box came
+  const question = covered ? '' : lines.join(' ').slice(0, 1000)
   if (!question && previous) return previous
   return { question: question || null, detail: [], options: [], selected: null, signature: JSON.stringify(['claude-question', question]), usesTerminalInput: true }
 }
@@ -158,6 +166,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
   let stage = null
   // Remember who pasted the notice even if a redraw hides its composer at the deadline.
   let expiredWake = null
+  let unseenPasteUntil = 0
   let wakeRecoveryAfter = wakeRecovery.blocked ? 0 : undefined
   let draftBlockSince
   let draftBlockTimer
@@ -493,7 +502,9 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       else raws.push(text)
       previous = cells
     }
-    const bare = index => (raws[index] ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
+    // A plugin's notice box over the top right goes first: its "╰──╯" on the blank row under the tab strip
+    // was read as the question's first row (cliOverlayBox.js)
+    const bare = index => withoutOverlayBox(raws[index] ?? '').replace(/^\s*[│┃|]\s?/u, '').replace(/\s*[│┃|]\s*$/u, '')
     const top = 0
     let last = raws.length - 1
     while (last > top && !bare(last).trim()) last--
@@ -1064,6 +1075,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     const due = waiting.length > 0 || remind.length > 0
     const input = due || attempt ? composer() : null
     const visible = due || attempt ? visibleComposer() : null
+    if ((input?.text && !input.suggestion) || (visible?.text && !visible.suggestion)) unseenPasteUntil = 0
     if (!attempt && waiting.length && !shellAtCursor() && !chatBlocked()) {
       const mode = recoverWakeMode(editorWithBounds(input, visible))
       if (mode) {
@@ -1076,13 +1088,18 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     if (attempt) {
       const { expires, mode, prompt, ids } = attempt
       const expected = compact(prompt)
-      const exact = input?.text === expected && !input.suggestion
-      const visibleExact = !visible?.historical && visible?.text === expected
+      // The notice once, or repeated when an earlier paste showed late (a session still starting reads its
+      // input after drawing the composer, 2026-11-27 user report): either way only our own line
+      const ours = text => !!text && text.length % expected.length === 0 && text.length <= expected.length * 3
+        && expected.repeat(text.length / expected.length) === text
+      const exact = ours(input?.text) && !input.suggestion
+      const visibleExact = !visible?.historical && ours(visible?.text)
       // After expiry a matching cursor row alone could belong to history above the real editor.
       const cursorOnly = !expiredWake && (kind !== 'codex' || !visible)
       const rendered = !shellAtCursor() && (visibleExact || (exact && cursorOnly))
       if (rendered) {
         userDraft = false
+        attempt.seen = true
         attempt.visibleUntil = now + WAKE_HIDDEN_TIMEOUT
       } else if (now >= attempt.visibleUntil) {
         stage = null
@@ -1096,7 +1113,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       // queue message") and runs the line once ready, so submit the notice already in its composer.
       const codexStarting = kind === 'codex' && working && !running && !hookWorking && isStarting()
       const canSubmit = !working || (mode === 'busy' && running && !hookWorking) || codexStarting
-      const verified = matchedEditor(input, visible, text => text === expected)
+      const verified = matchedEditor(input, visible, ours)
       const recoveryUntil = attempt.visibleUntil
       if (rendered && verified && parentInput(targetOf(verified)) && canSubmit && !blocked) {
         // Finish once even when the agent already read the message inside its running turn.
@@ -1137,6 +1154,10 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       // Claude redraws the same queue hint while processing a paste. Keep one attempt until
       // the new draft appears or the recovery window expires, even though this hint is empty.
       if (input?.queueHint) return
+      // A paste not drawn yet is still on its way: a CLI that is starting draws its empty composer before
+      // it reads input. Pasting again would put the notice in twice (2026-11-27 user report); the attempt
+      // ends at visibleUntil and a fresh paste follows then.
+      if (!attempt.seen) return
     }
     if (!parentInput(targetOf(input)) || shellAtCursor() || chatBlocked()) return
     // State not reported yet: look again once the screen has been still long enough
@@ -1144,6 +1165,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     // Busy but not in a task (starting up, approval prompt, unknown): wait as before
     if (!due || hookWorking || (working && !running) || !emptyEditor(input, visible)) return
     if (now < holdUntil) { schedule(holdUntil - now); return }
+    if (now < unseenPasteUntil) { schedule(unseenPasteUntil - now); return }
     userDraft = false
     emptyClaudeTarget = null
     const mode = waiting.length ? (working ? 'busy' : 'idle') : 'remind'
@@ -1285,7 +1307,18 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
       previous.map(draft => draft.displayed).join('') === input.text
   }
 
+  // A paste the CLI had not drawn when the user's keys took the attempt away: it still lands, so no
+  // second notice into the composer that only looks empty until then
+  function rememberUnseenPaste() {
+    const pending = stage ?? expiredWake
+    if (pending && !pending.seen) unseenPasteUntil = Math.max(unseenPasteUntil, pending.visibleUntil)
+  }
+
   function userInput(data) {
+    // The terminal's own replies are not typing: they used to drop the attempt while a new Codex had not
+    // drawn the paste yet, and the notice went in again on each focus change (2026-11-27 user report)
+    if (TERMINAL_REPORTS.test(data)) return
+    rememberUnseenPaste()
     const editingQueue = kind === 'claude' && /^(?:\x1b\[A|\x1bOA|\x10)$/.test(data) && composer()?.queueHint
     finishApprovalAnswer({ ok: false, reason: 'changed' })
     forceSendOffer = null
@@ -1430,10 +1463,14 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
             placeholder: `[PastedContent${Array.from(text).length}chars]`
           } : null
           const now = Date.now()
-          const draft = relaxed ? { text: compactText, target, verify, eraseCount: Array.from(text).length + lines } : null
+          // Claude Code turns a final `\` + Enter into a new line instead of sending (2026-11-27 user report). A space
+          // after it lets Enter submit; Claude drops the space from the recorded line (checked with Claude Code 2.1.332).
+          // Codex submits such a line as it is. Matching uses the text without spaces either way.
+          const pasted = kind === 'claude' && text.endsWith('\\') ? text + ' ' : text
+          const draft = relaxed ? { text: compactText, target, verify, eraseCount: Array.from(pasted).length + lines } : null
           chat = {
             text: compactText, length, lines, codexSpeed, probe, verify: verifySend, terminalInput: [],
-            claudeImages, codexImages, draft, paste: pasteOf(files?.[0] ?? text),
+            claudeImages, codexImages, draft, paste: pasteOf(files?.[0] ?? pasted),
             // The CLI reads and decodes image files before its native image tokens appear.
             timeout: images ? IMAGE_INPUT_TIMEOUT : relaxed ? CHAT_INPUT_TIMEOUT : INPUT_TIMEOUT,
             resolve, timer: null
@@ -1524,6 +1561,7 @@ function createAgentInboxWake({ kind, cols, rows, pendingMessages, unhandledMess
     setComposing(value) {
       composing = value
       if (value) {
+        rememberUnseenPaste()
         forceSendOffer = null
         emptyClaudeTarget = null
         expiredWake = null

@@ -30,14 +30,17 @@
   white-space: nowrap;
 }
 
+/* Categories in a column on the left of a wider dialog, the content scrolling on its own (2026-11-27 user
+   request); under 720px wide the column gives way to a list at the top (the container query below) */
 .modal-content.settings-modal {
-  width: 700px !important;
-  height: 600px !important;
-  max-width: 90vw;
-  max-height: 80vh;
+  width: 980px !important;
+  height: 640px !important;
+  max-width: 92vw;
+  max-height: 84vh;
   display: flex;
   flex-direction: column;
   padding: 0 !important;
+  container-type: inline-size;
 }
 
 /* Fixed Header */
@@ -60,30 +63,109 @@
   position: static;
 }
 
-/* Settings Tabs */
+/* Settings Tabs: the category column, then the content (only the content scrolls) */
 .settings-tabs {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  padding: 16px 20px;
 }
 
 .settings-tabs-list {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 4px;
-  background: var(--bg-tertiary);
-  border-radius: var(--radius-md);
-  margin-bottom: 16px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+  overflow-y: auto;
+}
+
+.settings-tabs-list .settings-tab-trigger {
+  flex: none;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.settings-tabs-list .settings-tab-trigger svg {
   flex-shrink: 0;
 }
 
+.settings-tabs-list .settings-tab-trigger[data-state="active"] {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  color: var(--text-primary);
+}
+
+.settings-tabs-list .settings-tab-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.settings-tabs > .settings-tab-content {
+  grid-column: 2;
+  grid-row: 1;
+  padding: 16px 20px;
+}
+
+/* The narrow dialog's category list (hidden while the column shows) */
+.settings-category-picker {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.settings-category-picker select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.settings-category-picker select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+@container (max-width: 719px) {
+  .settings-tabs {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-tabs-list {
+    display: none;
+  }
+
+  .settings-category-picker {
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .settings-tabs > .settings-tab-content {
+    grid-column: 1;
+    grid-row: 2;
+  }
+}
+
 .settings-tab-trigger {
-  /* Keep each label together as the tabs wrap in narrower windows. */
+  /* Keep each label on one line */
   flex: 1 1 auto;
   display: flex;
   align-items: center;
@@ -119,9 +201,8 @@
   padding-right: 4px;
 }
 
-:is(.settings-mcp-content, .settings-theme-content) {
+.settings-tabs > :is(.settings-mcp-content, .settings-theme-content) {
   overflow: hidden;
-  padding-right: 0;
 }
 
 :is(.settings-mcp-tabs, .settings-theme-tabs) {

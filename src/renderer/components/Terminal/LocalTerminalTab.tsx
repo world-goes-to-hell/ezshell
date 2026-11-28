@@ -40,7 +40,11 @@ import { isTabHostPreviewed } from '../../lib/tabHosts'
 import { focusPaneInput } from '../../lib/paneFocus'
 import { answerableAskItem, askTakenToTerminal } from '../../lib/askQuestion'
 import { hasTypedInput } from '../../lib/terminalReplies'
+import { terminalDropText } from '../../lib/droppedFiles'
+import { dropPlatform, useFileDrop } from '../../hooks/useFileDrop'
 import { registerTerminalPane } from '../../lib/terminalPanes'
+import { useDevelopmentRuns } from '../../lib/developmentRun'
+import { TerminalScrollJump } from './TerminalScrollJump'
 import { useAskQuestionStore } from '../../stores/askQuestionStore'
 import './LocalTerminalTab.css'
 
@@ -90,6 +94,9 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const paneRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const terminalRef = useRef<Terminal | null>(null)
+  // The same terminal for the server log's jump buttons, which subscribe to its scrolling
+  const [viewTerminal, setViewTerminal] = useState<Terminal | null>(null)
+  const isDevelopment = useDevelopmentRuns(state => !!state.runs[shellId])
   // The chat view covers the terminal: its error/warning tints are not drawn meanwhile
   const logHighlightRef = useRef<LogHighlight | null>(null)
   const coveredRef = useRef(false)
@@ -104,7 +111,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const [showHistory, setShowHistory] = useState(false)
   const [usageActions, setUsageActions] = useState<HTMLSpanElement | null>(null)
   const agentWork = useAgentMessagesStore(state => {
-    const agent = state.snapshot.agents.find(item => item.shellId === shellId)
+    const agent = shellAgentOf(state.snapshot.agents, shellId)
     if (!agent) return undefined
     return !exit && isAgentWorking(agent) ? 'working' : 'idle'
   })
@@ -137,6 +144,15 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
   const setSplitTree = useTerminalStore(state => state.setSplitTree)
   const tabName = tab?.title ?? '로컬 터미널'
   const isPowerShell = /^win/i.test(navigator.platform)
+  // Files dropped on the terminal type their paths, as Windows Terminal does; as a paste, so Claude Code and
+  // Codex take a picture's path as an attachment. In the chat view its cover takes the drop (AgentChatCover)
+  const fileDrop = useFileDrop(paths => {
+    const terminal = terminalRef.current
+    const text = terminalDropText(paths, dropPlatform())
+    if (!terminal || !text) return
+    terminal.paste(text)
+    terminal.focus()
+  }, !exit && !isChat)
   const commandHistory = useTerminalCommandHistory(shellId, 'main', (data) => {
     window.electronAPI.localShellWrite?.(shellId, data)
   }, {
@@ -182,6 +198,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
     const unregisterPane = registerTerminalPane(host, terminal)
     attachTerminalWebLinks(terminal)
     terminalRef.current = terminal
+    setViewTerminal(terminal)
     fitRef.current = addon
     const detachCommandHistory = commandHistory.attach(terminal)
     const disableCopyOnSelect = enableCopyOnSelect(terminal)
@@ -355,6 +372,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
       unregisterPane()
       terminal.dispose()
       terminalRef.current = null
+      setViewTerminal(null)
       fitRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -521,7 +539,8 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           {isChat && <button type="button" onClick={showTerminal}>터미널 보기</button>}
         </div>
       )}
-      <div className="local-terminal-stage" data-chat-question={inlineQuestion || undefined}>
+      <div className="local-terminal-stage" data-chat-question={inlineQuestion || undefined} {...fileDrop.handlers}>
+        {fileDrop.dropping && <div className="file-drop-overlay" aria-hidden="true">놓으면 파일 경로를 붙여 넣습니다</div>}
         <div
           ref={hostRef}
           className="local-terminal-host"
@@ -560,6 +579,7 @@ function LocalShellView({ tabId, pane, shellId, takesFocus, style }: LocalShellV
           />
         )}
         {!isChat && <AgentScreenReturnBar shellId={shellId} />}
+        {isDevelopment && !isChat && <TerminalScrollJump terminal={viewTerminal} />}
         {!antigravity && <AgentSleepCover shellId={shellId} onTerminal={showTerminal} />}
       </div>
       {!antigravity && <AgentPaneUsage shellId={shellId} actionsRef={hasSpeedControls ? setUsageActions : undefined} showIdentity={!isChat} style={chatTheme?.style} />}

@@ -7,6 +7,8 @@ export const OPEN_CLAUDE_PROFILE_EVENT = 'ezshell:open-claude-profile'
 export interface OpenClaudeProfile {
   profileId: string
   shellId?: string
+  /** continue: this pane's conversation goes on under the account (needs shellId); new: a session of its own */
+  mode?: 'continue' | 'new'
 }
 
 export function openClaudeProfile(request: OpenClaudeProfile) {

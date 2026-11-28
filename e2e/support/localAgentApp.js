@@ -145,6 +145,8 @@ pty.spawn = (file, args, options) => {
       showAskDialog()
       return
     }
+    // Everything typed or pasted into the agent (local-agent-chat-images: files dropped on the terminal)
+    fs.appendFileSync(path.join(profile, (id || 'shell') + '-input'), data)
     if (!id && /^claude(?: [^\r]*)?\r$/.test(data)) id = 'manual-claude'
     if (!id && data === 'codex --yolo\r') id = 'manual-codex'
     const pasted = data.startsWith('\x1b[200~') && data.endsWith('\x1b[201~') ? data.slice(6, -6) : null

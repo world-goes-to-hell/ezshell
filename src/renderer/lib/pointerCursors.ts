@@ -6,7 +6,10 @@ export const CURSOR_STATES = [
 ] as const
 export type CursorState = typeof CURSOR_STATES[number]
 
-export const CURSOR_SET_IDS = ['system', 'big', 'contrast', 'fine', 'paw', 'jelly', 'star', 'heart', 'pixel'] as const
+export const CURSOR_SET_IDS = [
+  'system', 'big', 'contrast', 'fine', 'paw', 'jelly', 'star', 'heart', 'pixel',
+  'dart', 'obsidian', 'origami', 'fountain', 'crystal', 'leaf', 'droplet', 'bolt', 'moon'
+] as const
 export type CursorSetId = typeof CURSOR_SET_IDS[number]
 
 export const CURSOR_SIZES = [32, 48, 64] as const
@@ -49,6 +52,7 @@ function sparkle(cx: number, cy: number, s: number) {
 interface Style {
   fill: string; stroke: string; sw: number; line: string; lineOutline: string | null; accent: string; bad: string
   join: 'miter' | 'round'; cap: 'butt' | 'round'; k: number; lw: number; ring: boolean
+  arrowPath: string; arrowDetail: string
 }
 
 interface Tools {
@@ -90,18 +94,18 @@ function textBeam(o: Style, outline: string) {
 function vectorSet(style: Partial<Style>, override?: (tools: Tools) => Partial<Shapes>): Shapes {
   const o: Style = {
     fill: '#fff', stroke: '#111', sw: 1.6, line: '#fff', lineOutline: null, accent: '#4fd1a5', bad: '#e5253b',
-    join: 'miter', cap: 'butt', k: 1, lw: 2.4, ring: false, ...style
+    join: 'miter', cap: 'butt', k: 1, lw: 2.4, ring: false, arrowPath: ARROW, arrowDetail: '', ...style
   }
   const outline = o.lineOutline || o.stroke
   const two = (inner: string, fill?: string) =>
     `<g fill="${o.stroke}" stroke="${o.stroke}" stroke-width="${o.sw * 2}" stroke-linejoin="${o.join}" stroke-linecap="${o.cap}">${inner}</g><g fill="${fill || o.fill}">${inner}</g>`
   const line = (d: string, color: string, width: number) =>
     `<g fill="none" stroke-linecap="${o.cap}" stroke-linejoin="${o.join}"><path d="${d}" stroke="${outline}" stroke-width="${width + o.sw * 2}"/><path d="${d}" stroke="${color}" stroke-width="${width}"/></g>`
-  const arrow = (extra = '', k = o.k, fill?: string) => {
+  const arrow = (extra = o.arrowDetail, k = o.k, fill?: string) => {
     const reach = tipReach(o, k)
     const x = ARROW_TIP + reach * TIP_OUT[0]
     const y = ARROW_TIP + reach * TIP_OUT[1]
-    return `<g transform="translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${k}) translate(-6 -3)">${two(`<path d="${ARROW}" stroke-miterlimit="2"/>`, fill)}${extra}</g>`
+    return `<g transform="translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${k}) translate(-6 -3)">${two(`<path d="${o.arrowPath}" stroke-miterlimit="2"/>`, fill)}${extra}</g>`
   }
   const handShape = '<rect x="11" y="3" width="5" height="16" rx="2.5"/><rect x="7" y="14" width="19" height="14" rx="6"/>'
   const ring = (r: number, width: number, color: string) =>
@@ -118,7 +122,7 @@ function vectorSet(style: Partial<Style>, override?: (tools: Tools) => Partial<S
       hotspot: [16, 16]
     },
     progress: {
-      svg: arrow('', o.k * 0.8) +
+      svg: arrow(o.arrowDetail, o.k * 0.8) +
         `<circle cx="23" cy="23" r="5" fill="none" stroke="${o.stroke}" stroke-width="${3 + o.sw * 2}"/><circle cx="23" cy="23" r="5" fill="none" stroke="${o.fill}" stroke-width="3"/>` +
         `<path d="M23 18A5 5 0 0 1 28 23" fill="none" stroke="${o.accent}" stroke-width="3" stroke-linecap="round"/>`,
       hotspot: [ARROW_TIP, ARROW_TIP]
@@ -254,7 +258,63 @@ export const CURSOR_SETS: readonly CursorSet[] = [
       pointer: { svg: t.two(`<path d="${heartPath(16, 15, 1.12)}"/>`, '#ff7aa8') + '<ellipse cx="10.5" cy="11.5" rx="2" ry="1.3" fill="#fff" opacity=".7" transform="rotate(-30 10.5 11.5)"/>', hotspot: [16, 16] }
     }))
   },
-  { id: 'pixel', name: '픽셀 레트로', description: '8비트 도트. 또렷한 계단 모양', shapes: PIXEL }
+  { id: 'pixel', name: '픽셀 레트로', description: '8비트 도트. 또렷한 계단 모양', shapes: PIXEL },
+  {
+    id: 'dart', name: '청록 다트', description: '청록색 창끝과 가느다란 꼬리',
+    shapes: vectorSet({ fill: '#4be7ca', stroke: '#103c3b', line: '#c4fff1', accent: '#26c3ac', sw: 1.4, lw: 1.8,
+      arrowPath: 'M6 3L24 15.5L16.5 16L19.8 25L16.3 26.4L12.6 17.7L8 23Z',
+      arrowDetail: '<path d="M8 6.5L13.7 15.5L8.9 19.5Z" fill="#c4fff1"/>' })
+  },
+  {
+    id: 'obsidian', name: '흑요석', description: '은빛 테두리를 두른 검은 쐐기',
+    shapes: vectorSet({ fill: '#161822', stroke: '#f1f3fc', line: '#161822', accent: '#9aacdb', sw: 1.6,
+      arrowPath: 'M6 3L23 14.5L16 16L18.3 24L14.5 25.3L11.8 18L6 22Z',
+      arrowDetail: '<path d="M8 6.5L19 14L13 14.5L8 18.5Z" fill="#52596f"/>' })
+  },
+  {
+    id: 'origami', name: '접은 종이', description: '접힌 선이 보이는 흰 종이비행기',
+    shapes: vectorSet({ fill: '#f8fbff', stroke: '#354766', line: '#e5edff', accent: '#84a8e8', sw: 1.4,
+      arrowPath: 'M6 3L27 18L18 16.5L14 26L11.2 17.2L7.6 20.4Z',
+      arrowDetail: '<path d="M7.7 6.4L18 16.5L14 26L11.2 17.2Z" fill="#a9bee5"/><path d="M7.7 6.4L11.2 17.2" stroke="#354766" stroke-width=".8"/>' })
+  },
+  {
+    id: 'fountain', name: '만년필', description: '먹색 몸통에 금빛 펜촉',
+    shapes: vectorSet({ fill: '#eec777', stroke: '#3e3023', line: '#ffdf9a', accent: '#b37c39', sw: 1.4, lw: 1.7, join: 'round',
+      arrowPath: 'M6 3L13.8 7.7L16.5 12.7L25 21.2L20.3 26L11.8 17.4L7.7 12.2Z',
+      arrowDetail: '<path d="M16.5 12.7L25 21.2L20.3 26L11.8 17.4Z" fill="#554234"/><path d="M7.8 5.4L11.6 11" stroke="#3e3023" stroke-width="1"/><circle cx="12.3" cy="12" r="1.3" fill="#3e3023"/>' })
+  },
+  {
+    id: 'crystal', name: '보라 수정', description: '보랏빛 결정의 각진 면',
+    shapes: vectorSet({ fill: '#ccb5ff', stroke: '#49347a', line: '#f0e8ff', accent: '#8250d4', sw: 1.45, ring: true,
+      arrowPath: 'M6 3L18 10L22 19L17.2 27L10.5 20.5L6 12Z',
+      arrowDetail: '<path d="M6 3L15 13L10.5 20.5L6 12Z" fill="#f1e8ff"/><path d="M15 13L22 19L17.2 27L10.5 20.5Z" fill="#9975e5"/>' })
+  },
+  {
+    id: 'leaf', name: '새잎', description: '연둣빛 잎과 작은 잎맥',
+    shapes: vectorSet({ fill: '#a6e27c', stroke: '#2b5b36', line: '#d5f7aa', accent: '#79c14f', sw: 1.45, join: 'round', cap: 'round',
+      arrowPath: 'M6 3C15 5 25 12 22 21C21.3 23 17 26 14 24C7 21 6.2 14 6 3Z',
+      arrowDetail: '<path d="M7.2 5.8Q13 15 16.8 23M12 13L16.5 13.7M15.2 19L19.2 18M12.7 15.7L9.5 15" fill="none" stroke="#38643e" stroke-width="1.05" stroke-linecap="round"/>' })
+  },
+  {
+    id: 'droplet', name: '물방울', description: '끝이 뾰족한 파란 물방울',
+    shapes: vectorSet({ fill: '#85d7ff', stroke: '#214e80', line: '#d3f1ff', accent: '#399de1', sw: 1.45, join: 'round', cap: 'round',
+      arrowPath: 'M6 3C12 9 23.8 11.5 23.8 19.2C23.8 26.2 15 29 10.5 23.3C6.2 18.2 9.3 11 6 3Z',
+      arrowDetail: '<path d="M10.7 15C10.2 18.8 11.7 21.5 14.8 22.8" fill="none" stroke="#e2f7ff" stroke-width="2.2" stroke-linecap="round"/>' })
+  },
+  {
+    id: 'bolt', name: '노란 번개', description: '선명한 노란색 지그재그',
+    shapes: vectorSet({ fill: '#ffda61', stroke: '#4e3814', line: '#ffefae', accent: '#ed961d', sw: 1.5,
+      arrowPath: 'M6 3L21 12L15.5 14.1L23 26L8 17L13.6 14.8Z',
+      arrowDetail: '<path d="M9.3 6.5L18.2 11.9L14.2 13.4Z" fill="#fff2af"/>' })
+  },
+  {
+    id: 'moon', name: '달빛', description: '남색 화살표와 초승달 손가락',
+    shapes: vectorSet({ fill: '#475f9f', stroke: '#cbd9ff', line: '#e5ebff', lineOutline: '#29375c', accent: '#ffe192', sw: 1.35,
+      arrowPath: 'M6 3L22 16.6L15.6 17.4L19.5 24.8L15.4 27L11.5 19.7L6 23Z' }, t => ({
+      default: { svg: t.arrow() + `<path d="${sparkle(24.5, 8, 3.2)}" fill="#ffe192" stroke="#485780" stroke-width=".85"/>`, hotspot: [ARROW_TIP, ARROW_TIP] },
+      pointer: { svg: t.two('<path d="M20.6 5.1A11.5 11.5 0 1 0 26.7 23.2A10.5 10.5 0 0 1 20.6 5.1Z"/>', '#ffe192'), hotspot: [16, 16] }
+    }))
+  }
 ]
 
 export function cursorSet(id: CursorSetId): CursorSet {

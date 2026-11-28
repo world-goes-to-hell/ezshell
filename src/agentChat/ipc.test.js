@@ -9,6 +9,7 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
   const sent = []
   const discarded = []
   const captures = []
+  const decoded = []
   let stored = 0
   const bitmap = { getSize: () => ({ width: 10, height: 10 }), toPNG: () => Buffer.from('png') }
   const { sendCapture, clearClipboard } = registerAgentChatIpc({
@@ -35,6 +36,7 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
       read: async () => ({ text: '', image: {} }),
       readText: async () => 'plain text',
       decodeImage: async () => bitmap,
+      decodeImageFile: async file => { decoded.push(file); return bitmap },
       readStoredImage,
       storeImage: () => `C:\\tmp\\shot-${++stored}.png`,
       discardImage: file => discarded.push(file)
@@ -49,8 +51,32 @@ function harness(kind = 'claude', { chats = {}, active = () => null, agentId = (
     expect(result.images).toHaveLength(1)
     return result.images[0].id
   }
-  return { call, callFromChild, paste, sent, discarded, sendCapture, clearClipboard, captures }
+  return { call, callFromChild, paste, sent, discarded, sendCapture, clearClipboard, captures, decoded }
 }
+
+describe('images dropped on the chat', () => {
+  it('attaches the pictures of this PC that were dropped, as the 이미지 첨부 button does', async () => {
+    const { call, decoded } = harness()
+    const result = await call('agent-chat-drop-images', 'local:1', ['C:\\shots\\a.png', 'D:/b c.JPG'])
+    expect(result).toMatchObject({ ok: true, kind: 'images' })
+    expect(result.images).toHaveLength(2)
+    expect(decoded).toEqual(['C:\\shots\\a.png', 'D:/b c.JPG'])
+  })
+
+  it('reads nothing that is not a picture on this PC (network, device, other files, too many)', async () => {
+    const { call, decoded } = harness()
+    for (const paths of [['\\\\server\\share\\a.png'], ['//server/a.png'], ['C:\\a.txt'], ['relative.png'], ['C:\\%TEMP%\\a.png'],
+      [], 'C:\\a.png', [42], Array.from({ length: 9 }, (_, i) => `C:\\${i}.png`)]) {
+      expect(await call('agent-chat-drop-images', 'local:1', paths)).toMatchObject({ ok: false })
+    }
+    expect(decoded).toEqual([])
+  })
+
+  it('is refused while locked and for an Antigravity chat (text only)', async () => {
+    expect(await harness('claude', { isLocked: () => true }).call('agent-chat-drop-images', 'local:1', ['C:\\a.png'])).toMatchObject({ ok: false })
+    expect(await harness('antigravity').call('agent-chat-drop-images', 'local:1', ['C:\\a.png'])).toMatchObject({ ok: false })
+  })
+})
 
 const retryRequest = () => ({ acceptedAt: Date.now() - 15_000, transcriptId: 'a'.repeat(64), ignoreIds: [] })
 const emptyTranscriptCheck = { hasTranscript: () => true, findRecordedSend: async () => null }

@@ -22,6 +22,7 @@ import { outputFileName } from '../../lib/terminalText'
 import { TerminalContextMenu, type TerminalMenuGroup, type TerminalMenuItem } from '../Terminal/TerminalContextMenu'
 import { webLinkItems } from '../Terminal/TerminalWebLinkMenu'
 import { chatTextForClipboard, diffLineKind, echoOutputId, isAgentChatProvider, sentImageKey, shellAgentOf, visibleSendTime, waitingItemIds, type SentChatImages } from '../../lib/agentChatItems'
+import { agentIdentityStatus } from '../../lib/agentIdentity'
 import { turnUsageSpots, turnUsageText } from '../../lib/agentTurnUsage'
 import { toast } from '../../stores/toastStore'
 import { AgentChatSubagents } from './AgentChatSubagents'
@@ -44,6 +45,8 @@ import { allSlashCommands, draftFor, isSlashCommand, matchSlashCommands, type Sl
 import { useAgentScreenReturnStore } from '../../stores/agentScreenReturnStore'
 import { useAgentScreenWatch } from './useAgentScreenWatch'
 import { ClaudeProfileMenu } from './ClaudeProfileMenu'
+import { CHAT_IMAGE_FILE, terminalDropText } from '../../lib/droppedFiles'
+import { dropPlatform, useFileDrop } from '../../hooks/useFileDrop'
 import type { ChatAppearance } from '../../themes/chatThemes'
 import { AgentMailBell } from './AgentMailBell'
 import './AgentChat.css'
@@ -57,6 +60,7 @@ const STATUS_LABELS: Record<string, string> = {
   working: '작업 중',
   starting: '시작 중',
   blocked: '응답 필요',
+  reply: '답장 대기',
   sleeping: '잠듦',
   unknown: '',
   error: '오류',
@@ -491,6 +495,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   const status = chat?.state === 'ended' ? 'ended'
     : chat?.approval ? 'blocked'
       : (antigravity ? chat?.status : agent?.status) ?? 'unknown'
+  // The same reply-wait status as the sidebar and pane indicator. Keep the CLI status for input decisions.
+  const displayedStatus = agent ? agentIdentityStatus({ ...agent, status }).status : status
   // Claude's AskUserQuestion: answered on the chat's own card while its dialog shows (and while the card's
   // answer is on its way: the dialog is out of reach meanwhile), unless it went to the terminal
   const askSending = useAskQuestionStore(state => state.sending.get(shellId))
@@ -543,6 +549,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     && !folderTrust && !sending, onShowTerminal)
   const replyId = chat?.reply?.sendId
   const idle = status === 'idle'
+  const headerStatus = STATUS_LABELS[displayedStatus] || (antigravity && idle ? '입력 대기' : '')
   const canReply = !isOver && !composerBlocked && status !== 'error' && (!antigravity || idle)
   const canAddQuote = canReply && !subagent && !sending && !pasting && !stopping && !changingSpeed && quotes.length < CHAT_QUOTE_LIMIT
   const canStop = !antigravity && canReply && (status === 'working' || Boolean(replyId))
@@ -577,6 +584,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
   if (canReply) {
     if (stopping) progressLabel = '중지하는 중…'
     else if (sending) progressLabel = '보내는 중…'
+    else if (displayedStatus === 'reply') progressLabel = '답장 대기…'
     else if (replyId) progressLabel = replyWaiting ? '앞 작업 진행 중…' : '답변 생성 중…'
     else if (status === 'working') progressLabel = '작업 중…'
   }
@@ -895,11 +903,12 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     box.focus()
   }
 
-  const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files') => {
-    if (antigravity && source === 'files') return
+  const readIntoDraft = async (box: HTMLTextAreaElement, source: 'clipboard' | 'files' | 'drop', dropped: string[] = []) => {
+    if (antigravity && source !== 'clipboard') return
+    const dropImages = window.electronAPI.agentChatDropImages
     const read = source === 'clipboard'
       ? window.electronAPI.agentChatReadClipboard
-      : window.electronAPI.agentChatPickImages
+      : source === 'drop' ? (dropImages && ((id: string) => dropImages(id, dropped))) : window.electronAPI.agentChatPickImages
     if (!read || box.readOnly || pastePending.current || sendPending.current) return
     const errorTitle = source === 'clipboard' ? '붙여넣기 실패' : '이미지 첨부 실패'
     const { value: original, selectionStart, selectionEnd } = box
@@ -911,7 +920,7 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       setAttachments(current => current.filter(image => used.has(image)))
       return true
     }
-    if (source === 'files') reclaimUnused()
+    if (source !== 'clipboard') reclaimUnused()
     if (!attachments.length) nextAttachmentNumber.current = 0
     pastePending.current = true
     setPasting(true)
@@ -959,9 +968,28 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     } finally {
       pastePending.current = false
       setPasting(false)
-      if (source === 'files' && boxRef.current === box) box.focus()
+      if (source !== 'clipboard' && boxRef.current === box) box.focus()
     }
   }
+
+  // Files dropped on the chat (2026-11-27 user request): pictures are attached as by 이미지 첨부, other files
+  // go in at the caret as their paths (quoted as in the terminal)
+  const dropIntoDraft = (paths: string[]) => {
+    const box = boxRef.current
+    if (!box || box.readOnly || composerBlocked || pastePending.current || sendPending.current) {
+      toast.error('첨부하지 못했습니다', '지금은 입력칸에 넣을 수 없습니다.')
+      return
+    }
+    const images = antigravity || !window.electronAPI.agentChatDropImages ? [] : paths.filter(item => CHAT_IMAGE_FILE.test(item))
+    const text = terminalDropText(paths.filter(item => !images.includes(item)), dropPlatform())
+    if (text) {
+      const start = box.selectionStart
+      placeDraft(box, box.value.slice(0, start) + text + box.value.slice(box.selectionEnd), start + text.length)
+    }
+    if (images.length) void readIntoDraft(box, 'drop', images)
+    else box.focus()
+  }
+  const fileDrop = useFileDrop(dropIntoDraft, !isOver)
 
   const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     if (antigravity || composerBlocked || !window.electronAPI.agentChatReadClipboard
@@ -1270,7 +1298,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
     <div className="agent-chat-cover" ref={coverRef} tabIndex={-1} role="region" aria-label="에이전트 채팅"
       data-chat-theme={appearance?.id} data-chat-bubbles={appearance?.bubbles || undefined}
       style={appearance?.style}
-      onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu}>
+      onKeyDown={onCoverKeyDown} onContextMenu={onContextMenu} {...fileDrop.handlers}>
+      {fileDrop.dropping && (
+        <div className="file-drop-overlay" aria-hidden="true">{antigravity ? '놓으면 파일 경로를 입력칸에 넣습니다' : '놓으면 첨부합니다 (이미지는 사진으로, 다른 파일은 경로로)'}</div>
+      )}
       <div className="agent-chat-parent" inert={Boolean(subagent)}>
       <header className="agent-chat-head">
         {kind && ProviderIcon && (
@@ -1285,10 +1316,10 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
           aria-label={`제목 복사 · ${title}`} onClick={() => void copyToClipboard(title)}>
           {title}
         </button>
-        {(STATUS_LABELS[status] || (antigravity && idle)) && (
-          <span className="agent-chat-status" data-status={status}>
-            {status === 'working' && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
-            {antigravity && idle ? '입력 대기' : STATUS_LABELS[status]}
+        {headerStatus && (
+          <span className="agent-chat-status" data-status={displayedStatus}>
+            {displayedStatus === 'working' && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
+            {headerStatus}
           </span>
         )}
         {/* Opens the messages not handled yet; picking one asks the agent to handle it now (AgentMailBell) */}
@@ -1426,7 +1457,8 @@ export function AgentChatCover({ shellId, appearance, usageActions, tabId, getSp
       {!isOver && (
         <div className="agent-chat-composer">
           {progressLabel && <p className="agent-chat-reply-progress" role="status">
-            <RiLoader4Line className="agent-chat-spin" aria-hidden />{progressLabel}
+            {(displayedStatus !== 'reply' || stopping || sending) && <RiLoader4Line className="agent-chat-spin" aria-hidden />}
+            {progressLabel}
           </p>}
           {kind === 'claude' && forceToken && (draftImages.text || draftImages.images.length > 0) && (
             <div className="agent-chat-force-send">

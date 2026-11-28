@@ -10,6 +10,8 @@ const MAX_COMMENT = 20000
 const MARK_TYPES = new Set(['arrow', 'box', 'pen', 'text', 'badge', 'mosaic'])
 // The strip between captures is hidden this long before the screen is read, so it is not in the picture
 const CHIP_HIDE_MS = 150
+// Give the desktop compositor time to present the screen with the pointer effects hidden.
+const POINTER_HIDE_MS = 50
 const CHIP_SIZE = { width: 440, height: 48 }
 const TOO_BIG_TO_STACK = '캡처가 너무 커서 한 장으로 합쳐 복사할 수 없습니다. 바로작업으로 보내거나 캡처 수를 줄여 주세요.'
 
@@ -54,7 +56,8 @@ function resolveShots(list, earlierCount, imageSize) {
 function createQuickCapture({
   desktopCapturer, clipboard, ClipboardItem, BrowserWindow, getDisplay, isAvailable, nativeImage = null,
   listAgents = () => [], repoFolders = async () => [], storeAttachment, sendCapture, sendNewCapture, focusWindow = () => {},
-  onSent = () => {}, onError = () => {}, delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+  onSent = () => {}, onError = () => {}, pausePointerEffects = () => null,
+  delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 }) {
   let active = null
   // The captures of a run that goes on after `추가 캡처`: each one's cropped pixels (main's own) and marks, the
@@ -83,6 +86,8 @@ function createQuickCapture({
     if (active === task) active = null
     task.abort()
     if (task.window && !task.window.isDestroyed()) task.window.destroy()
+    task.resumePointerEffects?.()
+    task.resumePointerEffects = null
   }
 
   /** Everything ends, earlier captures included: lock, quit, the main window closing */
@@ -154,6 +159,8 @@ function createQuickCapture({
     let outcome = 'closed'
     let timer
     try {
+      const pointerEffects = pausePointerEffects()
+      task.resumePointerEffects = pointerEffects?.resume
       if (run.chip) {
         closeChip(run)
         await wait(delay(CHIP_HIDE_MS))
@@ -163,10 +170,18 @@ function createQuickCapture({
       run.display = display
       const { bounds, scaleFactor } = display
       const sources = await wait(
-        desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: { width: Math.round(bounds.width * scaleFactor), height: Math.round(bounds.height * scaleFactor) }
-        }),
+        (async () => {
+          if (pointerEffects?.ready) {
+            await pointerEffects.ready
+            if (!available()) return []
+            await delay(POINTER_HIDE_MS)
+          }
+          if (!available()) return []
+          return desktopCapturer.getSources({
+            types: ['screen'],
+            thumbnailSize: { width: Math.round(bounds.width * scaleFactor), height: Math.round(bounds.height * scaleFactor) }
+          })
+        })(),
         new Promise(resolve => { timer = setTimeout(resolve, 4000, []); timer.unref?.() })
       )
       if (!available()) return false

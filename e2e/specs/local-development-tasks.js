@@ -46,6 +46,24 @@ function fixture(backendPort, frontendPort) {
   fs.writeFileSync(path.join(repo, 'legacy', '.settings', 'org.eclipse.wst.common.component'),
     '<?xml version="1.0"?><project-modules id="moduleCoreId"><wb-module deploy-name="shop"><wb-resource deploy-path="/" source-path="/WebContent"/><property name="context-root" value="shop"/></wb-module></project-modules>\n')
   fs.writeFileSync(path.join(repo, 'legacy', '.settings', 'org.eclipse.jdt.core.prefs'), 'org.eclipse.jdt.core.compiler.compliance=1.8\n')
+  const module = path.join(repo, 'legacy')
+  fs.mkdirSync(path.join(module, '.run'))
+  fs.mkdirSync(path.join(module, '.vscode'))
+  fs.mkdirSync(path.join(module, 'tomcat', 'conf'), { recursive: true })
+  fs.writeFileSync(path.join(module, '.run', 'Tomcat.run.xml'), `
+    <component name="ProjectRunConfigurationManager">
+      <configuration name="IDEA 로컬 서버" type="#com.intellij.j2ee.web.tomcat.TomcatRunConfigurationFactory" factoryName="Local">
+        <server-settings><option name="HTTP_PORT" value="8181"/></server-settings>
+        <deployment><file path="$PROJECT_DIR$/WebContent"><settings><option name="CONTEXT_PATH" value="/idea"/></settings></file></deployment>
+        <ConfigurationWrapper RunnerId="Run"><option name="VM_PARAMETERS" value="-Xmx512m -Ddb.password=fixture-secret"/></ConfigurationWrapper>
+      </configuration>
+    </component>`)
+  fs.writeFileSync(path.join(module, '.vscode', 'launch.json'), JSON.stringify({ configurations: [
+    { name: 'VS Code 로컬 서버', type: 'java', request: 'launch', mainClass: 'org.apache.catalina.startup.Bootstrap',
+      vmArgs: ['-Dcatalina.base=tomcat', '-Xms128m'] }
+  ] }))
+  fs.writeFileSync(path.join(module, 'tomcat', 'conf', 'server.xml'),
+    '<Server><Service><Connector port="8182"/><Engine><Host><Context path="/vscode"/></Host></Engine></Service></Server>')
   fs.writeFileSync(path.join(repo, 'backend', 'build.gradle'), "plugins { id 'org.springframework.boot' }\n")
   fs.writeFileSync(path.join(repo, 'backend', 'gradlew.bat'), '@echo off\r\nnode run.cjs %*\r\n')
   fs.writeFileSync(path.join(repo, 'backend', 'gradlew'), '#!/bin/sh\nexec node run.cjs "$@"\n', { mode: 0o755 })
@@ -220,6 +238,20 @@ function fixture(backendPort, frontendPort) {
       if (dividerVisible && previousOutputVisible) break
     }
     check('the restart divider and previous output can be reached in scrollback', dividerVisible && previousOutputVisible)
+    // 맨 위로 / 맨 아래로 over the server log (2026-11-27 user request)
+    const jump = label => `document.querySelector('[data-local-shell-id="${runningBackend}"] .terminal-scroll-jump button[aria-label="${label}"]')`
+    check('the server log offers 맨 위로 and 맨 아래로 once it has scrollback', await until(`!!${jump('맨 위로')} && !!${jump('맨 아래로')}`, 3000))
+    await click(...await center(jump('맨 위로')))
+    check('맨 위로 shows the first line of the log and the way back down stands out', await until(`
+      ${backendViewport}.scrollTop === 0 && ${jump('맨 위로')}.disabled && !${jump('맨 아래로')}.disabled &&
+      !${jump('맨 아래로')}.parentElement.hasAttribute('data-following')`, 3000))
+    await shot('local-development-log-jump')
+    await click(...await center(jump('맨 아래로')))
+    check('맨 아래로 returns to the newest line and the buttons fade while following it', await until(`(() => {
+      const view = ${backendViewport}
+      return view.scrollHeight - view.clientHeight - view.scrollTop < 2 && ${jump('맨 아래로')}.disabled &&
+        ${jump('맨 아래로')}.parentElement.hasAttribute('data-following')
+    })()`, 3000))
     await js(`${backendViewport}.scrollTop = ${backendViewport}.scrollHeight`)
 
     await send('Runtime.enable')
@@ -430,6 +462,27 @@ function fixture(backendPort, frontendPort) {
     })()`))
     check('the Eclipse-style build says what it does', await until(`
       document.querySelector('.run-preset-tomcat .run-preset-prepare-note')?.textContent.includes('build.xml 없이 이클립스 설정')`))
+    await setValue('#run-preset-folder', 'legacy')
+    const ideButton = `[...document.querySelectorAll('.run-preset-eclipse-btn')].find(button => button.textContent.includes('IntelliJ·VS Code 설정'))`
+    await js(`${ideButton}.click()`)
+    const importChoice = name => `[...document.querySelectorAll('.run-preset-servers label')].find(label => label.textContent.includes(${JSON.stringify(name)}))?.querySelector('input')`
+    check('automatically finds IntelliJ and VS Code Tomcat choices in the selected module', await until(`
+      !!${importChoice('IDEA 로컬 서버')} && !!${importChoice('VS Code 로컬 서버')} &&
+      !document.querySelector('.run-preset-eclipse-read') &&
+      document.querySelector('.run-preset-eclipse').textContent.includes('설정 파일 선택')`, 8000))
+    await js(`${importChoice('IDEA 로컬 서버')}.click()`)
+    check('IntelliJ fills the web folder, port, context and filtered VM arguments', await until(`
+      document.querySelector('#run-preset-webapp').value === 'legacy/WebContent' &&
+      document.querySelector('#run-preset-port').value === '8181' &&
+      document.querySelector('#run-preset-context').value === '/idea' &&
+      document.querySelector('#run-preset-vmargs').value === '-Xmx512m'`))
+    await js(`${importChoice('VS Code 로컬 서버')}.click()`)
+    check('VS Code fills the port and context from the project server configuration', await until(`
+      document.querySelector('#run-preset-port').value === '8182' &&
+      document.querySelector('#run-preset-context').value === '/vscode' &&
+      document.querySelector('#run-preset-vmargs').value === '-Xms128m'`))
+    await shot('local-run-preset-ide-import')
+    await setValue('#run-preset-folder', '.')
     await js(`document.querySelector('input[name="run-preset-prepare"][value="maven"]').click()`)
     check('a build before the server is warned about as a command that runs', await until(`
       !!document.querySelector('.run-preset-tomcat [aria-label="Maven 목표"]') &&
@@ -463,8 +516,17 @@ function fixture(backendPort, frontendPort) {
     await js(`document.querySelector('input[name="run-preset-kind"][value="custom"]').click()`)
     const server = path.join(__dirname, '..', 'support', 'devRunServer.js')
     await until(`!!document.querySelector('.run-preset-command')`)
+    // A typed command starts from the way found in the folder (2026-11-27), and follows the folder until typed in
+    await setValue('#run-preset-folder', 'backend')
+    check('a typed command starts filled with the command found in the folder', await until(`
+      /gradlew(\\.bat)? bootRun/.test(document.querySelector('.run-preset-command')?.value ?? '') &&
+      !!document.querySelector('.run-preset-command-found')`), await js(`document.querySelector('.run-preset-command')?.value`))
+    await setValue('#run-preset-folder', '.')
+    check('the filled command follows the folder while untouched (none found: empty, with the example)', await until(`
+      document.querySelector('.run-preset-command')?.value === '' && !document.querySelector('.run-preset-command-found')`))
     // Two spaces on purpose: the question must show the command as it runs
-    const typed = `node "${server}" --crash-after  5000`
+    const crashFile = '.ezshell-crash-test'
+    const typed = `node "${server}" --crash-file  ${crashFile}`
     await setValue('.run-preset-command', typed)
     check('a typed command is warned about in the dialog', await js(`!!document.querySelector('.run-preset-warn')`))
     // Stage 3: hot reload is for Spring Boot runs only; a typed command (the Node fixture) keeps it off
@@ -493,6 +555,8 @@ function fixture(backendPort, frontendPort) {
       return list.presets?.find(item => item.name === '시험 서버')?.logEncoding === 'utf-8'
     })()`))
     await shot('local-run-preset-idle')
+    const tabsBeforeStart = await js(`[...document.querySelectorAll('.terminal-tab')].map(tab => tab.dataset.tabId)`)
+    const activeBeforeStart = await js(`${activeTab}?.dataset.tabId ?? null`)
     await click(...await center(`${presetRow}.querySelector('[data-action="start"]')`))
     const ask = `document.querySelector('.run-command-dialog')`
     check('the typed command is shown exactly, spaces kept, before it first runs', await until(`
@@ -506,12 +570,24 @@ function fixture(backendPort, frontendPort) {
     await until(`!!${ask}`)
     await sleep(900)
     await js(`[...${ask}.querySelectorAll('button')].find(b => b.textContent.trim() === '실행').click()`)
-    check('the preset starts and its tab comes to the front', await until(`['starting', 'running'].includes(${presetRow}?.dataset.status) &&
-      ${inTerminal('VITE v5.4.0 ready')}`, 15000))
     check('once ready the row shows its port', await until(`${presetRow}?.dataset.status === 'running' &&
       /:\\d+/.test(${presetRow}.querySelector('.run-preset-pill[data-kind="port"]')?.textContent ?? '')`, 10000))
-    // 2026-11-26 user report: with its port and "오류 20", the row pushed 중지 and 더 보기 out of the sidebar.
-    // An error count is put beside the port for the measure: every button stays inside the row, the name gives way.
+    const readRun = async () => js(`(async () => {
+      const list = await window.electronAPI.runPresetsList(${JSON.stringify(repo)})
+      return list.states[list.presets.find(item => item.name === '시험 서버').id]
+    })()`)
+    const { shellId: presetShell, startedAt: presetStarted, address: presetAddress } = await readRun()
+    const presetTab = `document.querySelector('.terminal-tab[data-tab-id="${presetShell}"]')`
+    const presetListItem = `document.querySelector('.local-terms-item[data-local-session-id="${presetShell}"]')`
+    const tabsAfterStart = await js(`[...document.querySelectorAll('.terminal-tab')].map(tab => tab.dataset.tabId)`)
+    check('starting a preset leaves the tab bar and terminal list unchanged',
+      JSON.stringify(tabsAfterStart) === JSON.stringify(tabsBeforeStart) &&
+      await js(`(${activeTab}?.dataset.tabId ?? null) === ${JSON.stringify(activeBeforeStart)} && !${presetListItem}`))
+    const logButton = `${presetRow}.querySelector('[data-action="log"]')`
+    await click(...await center(logButton))
+    const presetLogOpen = `${activeTab}?.dataset.tabId === ${JSON.stringify(presetShell)} && ${inTerminal('VITE v5.4.0 ready')}`
+    check('로그 보기 opens the preset log and its existing output', await until(presetLogOpen, 10000))
+    // An error count shares the details line with the port while the name and actions stay above.
     const fits = await js(`(() => {
       const row = ${presetRow}
       const state = row.querySelector('.run-preset-state')
@@ -522,30 +598,46 @@ function fixture(backendPort, frontendPort) {
       extra.dataset.kind = 'err'
       state.append(extra)
       const box = row.getBoundingClientRect()
-      const buttons = [...row.querySelectorAll('.run-preset-main > .run-preset-btn, .run-preset-main > button')]
+      const main = row.querySelector('.run-preset-main')
+      const buttons = [...main.querySelectorAll('.run-preset-btn')]
       const out = buttons.filter(button => { const b = button.getBoundingClientRect(); return b.width < 16 || b.right > box.right - 1 || b.left < box.left })
-      const name = row.querySelector('.run-preset-name')
+      const name = main.querySelector('.run-preset-name')
       const port = row.querySelector('.run-preset-pill[data-kind="port"]')
       const result = { buttons: buttons.length, portOpens: port?.tagName === 'BUTTON' && /브라우저로 열기/.test(port.getAttribute('aria-label') ?? ''), out: out.map(b => b.getAttribute('aria-label')), nameWidth: Math.round(name.getBoundingClientRect().width), row: Math.round(box.width),
-        parts: [...row.querySelector('.run-preset-main').children].map(el => el.className.split(' ')[0].replace('run-preset-', '') + ':' + Math.round(el.getBoundingClientRect().width)).join(' ') }
+        detailsBelow: state.getBoundingClientRect().top >= main.getBoundingClientRect().bottom &&
+          [port, extra].every(pill => pill.getBoundingClientRect().right <= box.right - 1) }
       extra.remove()
       return result
     })()`)
-    check('a running row with its port and an error count keeps all its buttons inside, its port opens the browser', fits.buttons >= 3 && fits.portOpens && fits.out.length === 0 && fits.nameWidth >= 20, JSON.stringify(fits))
-    // The row tells the preset server's state (the tab of a local shell is its id)
-    const presetShell = await js(`${activeTab}?.dataset.tabId`)
+    check('a running row keeps its name and actions above the port and error count', fits.buttons >= 3 && fits.portOpens && fits.detailsBelow && fits.out.length === 0 && fits.nameWidth >= 20, JSON.stringify(fits))
     // The tab keeps its status dot (seen with the sidebar folded); only the text chip is left to the card
     check('the old development chip leaves a preset server alone, the tab keeps its dot', await js(`!document.querySelector('.development-status-chip[data-development-shell="' + ${JSON.stringify(presetShell)} + '"]') &&
       !!${activeTab}?.querySelector('.development-status-dot')`), String(presetShell))
     await shot('local-run-preset-running')
+    const closePresetLog = async () => {
+      await js(`${presetTab}.querySelector('.tab-close').click()`)
+      return until(`!${presetTab} && !${presetListItem}`)
+    }
+    const logClosed = await closePresetLog()
+    const { shellId: liveShell, startedAt: liveStarted, status: liveStatus } = await readRun()
+    const response = await waitServer(Number(new URL(presetAddress).port), value => value === 'ready')
+    check('closing a log removes both entries and leaves the same service responding', logClosed &&
+      liveShell === presetShell && liveStarted === presetStarted && liveStatus === 'running' && response === 'ready')
+    await click(...await center(logButton))
+    check('로그 보기 reattaches to the same run with its earlier output', await until(presetLogOpen, 10000))
+    await closePresetLog()
+    fs.writeFileSync(path.join(repo, crashFile), '')
     check('a crash turns the row red and tells the exit code', await until(`${presetRow}?.dataset.status === 'crashed' &&
-      ${presetRow}.textContent.includes('종료 1')`, 15000))
+      ${presetRow}.textContent.includes('종료 1') && !${presetTab}`, 15000))
+    fs.unlinkSync(path.join(repo, crashFile))
     const notice = `document.querySelector('.run-crash')`
     const failureReason = `${presetRow}?.querySelector('.run-preset-failure-line')`
     check('the stopped row and notice explain the failure with credentials redacted by default', await until(`
       ${failureReason}?.textContent.includes('Internal server error: fixture failed pwd=****') &&
       ${notice}?.querySelector('.run-crash-reason')?.textContent.includes('Internal server error: fixture failed pwd=****') &&
       !${failureReason}.textContent.includes('fixture-terminal-only')`))
+    await until(`!!${notice}`)
+    await js(`[...${notice}.querySelectorAll('button')].find(b => b.textContent.includes('로그 보기')).click()`)
     check('the crash notice masks the credential while the terminal shows the original output', await until(`
       ${notice}?.textContent.includes('Internal server error: fixture failed pwd=****') &&
       !${notice}.textContent.includes('fixture-terminal-only') && ${inTerminal('fixture-terminal-only')}`, 5000))
@@ -581,8 +673,10 @@ function fixture(backendPort, frontendPort) {
       await js(`${diagnosis}?.textContent`))
     await js(`[...${diagnosis}.querySelectorAll('button')].find(b => b.textContent.trim() === '닫기').click()`)
     await until(`!${diagnosis}`)
-    // Another tab in front first: a click that reached the row would bring the preset's log tab forward
-    await js(`[...document.querySelectorAll('.terminal-tab')].find(tab => tab.dataset.tabId !== ${JSON.stringify(presetShell)})?.click()`)
+    // A separate terminal in front: a click that reached the row would bring the preset's log tab forward
+    await rightClick(worktreeRow)
+    await until(`(${menuText}).includes('터미널 실행')`)
+    await driver.pick('터미널 실행')
     await until(`${activeTab}?.dataset.tabId !== ${JSON.stringify(presetShell)}`)
     const tabBeforeDiagnosis = await js(`${activeTab}?.dataset.tabId`)
     await click(...await center(`${presetRow}.querySelector('[aria-label$="더 보기"]')`))
@@ -594,9 +688,10 @@ function fixture(backendPort, frontendPort) {
       JSON.stringify({ before: tabBeforeDiagnosis, after: await js(`${activeTab}?.dataset.tabId`), presetShell }))
     await js(`[...${diagnosis}.querySelectorAll('button')].find(b => b.textContent.trim() === '닫기').click()`)
     await until(`!${diagnosis}`)
+    await closePresetLog()
     await js(`[...${notice}.querySelectorAll('button')].find(b => b.textContent.includes('다시 실행')).click()`)
-    check('다시 실행 clears both the notice and the previous failure reason', await until(
-      `['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice} && !${failureReason}`, 10000))
+    check('다시 실행 starts it in the background and clears the notice and the previous failure reason', await until(
+      `['starting', 'running'].includes(${presetRow}?.dataset.status) && !${notice} && !${failureReason} && !${presetTab}`, 10000))
     // It crashes again by design: stop it first so the next crash does not race the end of the spec
     await until(`${presetRow}?.dataset.status === 'running'`, 10000)
     await click(...await center(`${presetRow}.querySelector('[data-action="stop"]')`))

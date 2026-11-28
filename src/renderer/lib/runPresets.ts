@@ -2,7 +2,7 @@
 // the types of the IPC contract and the words and buttons a preset row shows. Kept free of React so the
 // rules are tested on their own.
 
-import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, LogEncoding, RunAction, RunPrepare, RunPreset, RunState, WorkspaceServer } from '../types'
+import type { EclipseImportDraft, HotReload, HotswapAgentStatus, JdkRuntime, LogEncoding, RunAction, RunCandidate, RunPrepare, RunPreset, RunState, WorkspaceServer } from '../types'
 export type { HotReload, RunAction, RunCandidate, RunErrorGroup, RunPrepare, RunPreset, RunReload, RunState, RunStatus } from '../types'
 
 export const IDLE_STATE: RunState = { status: 'idle', errors: 0 }
@@ -55,8 +55,7 @@ export function runButtons(state: RunState): RunButton[] {
   switch (state.status) {
     case 'preparing':
     case 'starting': return ['log', 'stop']
-    // With an address its port pill opens it (no room for a separate button in the sidebar's width)
-    case 'running': return state.address ? ['restart', 'stop'] : ['log', 'restart', 'stop']
+    case 'running': return ['log', 'restart', 'stop']
     case 'crashed': return ['log', 'restart']
     default: return state.shellId ? ['start', 'log'] : ['start']
   }
@@ -411,6 +410,14 @@ export function suggestPresetName({ kind, relative, taskId, command, contextPath
   return [...name].slice(0, MAX_NAME).join('')
 }
 
+/**
+ * The command a typed run starts from, until the user types in it (2026-11-27 user request): the way found
+ * in the folder that was chosen, else the first found; '' when none was found (the box shows its example)
+ */
+export function suggestCustomCommand(candidates: readonly Pick<RunCandidate, 'taskId' | 'command'>[], taskId: string | undefined): string {
+  return (candidates.find(item => item.taskId === taskId) ?? candidates[0])?.command ?? ''
+}
+
 /** Whether the run needs a JDK: Tomcat, and the Java ways main finds (a typed command picks its JDK under 고급) */
 export function usesJdk(preset: Pick<RunPreset, 'kind' | 'taskId' | 'command'>): boolean {
   if (preset.kind === 'tomcat') return true
@@ -452,6 +459,7 @@ export const LOG_ENCODINGS: Array<{ value: LogEncoding; label: string }> = [
 /** The fields a server of an Eclipse workspace fills (the user saves them) */
 export function workspaceServerFill(server: WorkspaceServer): Partial<PresetDraft> {
   const patch: Partial<PresetDraft> = {}
+  if (server.webapp) patch.webapp = server.webapp
   if (typeof server.vmArgs === 'string' && server.vmArgs.trim()) patch.vmArgs = server.vmArgs.replace(/[\r\n]+/g, ' ').trim()
   if (Number.isInteger(server.port) && server.port! > 0 && server.port! <= 65535) patch.portText = String(server.port)
   const context = server.contextPath?.trim()

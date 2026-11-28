@@ -19,6 +19,8 @@ const { isLocalFilePath } = require('./localKeyPath.js');
 
 /** Output kept per shell so a tab that is drawn again (pane split, tab moved) continues from it */
 const BACKLOG_CHARS = 256 * 1024;
+// A handed-over server's address is shown only when it is this PC's (the card links to it)
+const LOOPBACK_URL = /^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d{1,5}(?:\/[^\s]*)?$/;
 const MIN_SIZE = 2;
 const MAX_SIZE = 500;
 const MAX_WRITE_CHARS = 1024 * 1024;
@@ -1272,11 +1274,75 @@ function createLocalShells({
     return current && current.directory === kept.directory && String(current.dev) === kept.dev && String(current.ino) === kept.ino ? current : null;
   }
 
+  // Run preset servers an earlier app handed over: held (their output kept) until the run preset is checked
+  const keptDevelopment = new Map();
+  let keptDevelopmentQueue = [];
+
+  function keepDevelopment(shell, number) {
+    const development = shell.meta.development;
+    const valid = development && typeof development === 'object' && typeof development.taskId === 'string'
+      && development.taskId.startsWith('preset:') && development.run && typeof development.run === 'object';
+    if (!valid) {
+      // A development shell without a run to hand over: nothing will take it, so it does not run on unseen
+      if (Number.isInteger(shell.pid) && shell.pid > 0) killTrees([shell.pid]);
+      host.forget?.(shell.id);
+      return;
+    }
+    const pty = host.adopt(shell);
+    const pending = [];
+    let exit = null;
+    const listeners = [pty.onData(data => pending.push(data)), pty.onExit(info => { exit = info; })];
+    keptDevelopment.set(shell.id, {
+      pty, pid: shell.pid, development, cols: size(shell.cols, 80), rows: size(shell.rows, 24),
+      buffer: typeof shell.buffer === 'string' ? shell.buffer.slice(-BACKLOG_CHARS) : '',
+      take: () => { for (const listener of listeners) listener?.dispose?.(); return { pending, exit }; }
+    });
+    keptDevelopmentQueue.push({ id: shell.id, development, buffer: keptDevelopment.get(shell.id).buffer });
+    nextId = Math.max(nextId, Number(number) + 1);
+  }
+
+  /** The kept servers for runPresets to check (given once) */
+  function takeKeptDevelopment() {
+    const taken = keptDevelopmentQueue;
+    keptDevelopmentQueue = [];
+    return taken;
+  }
+
+  /** A kept server whose run preset checked out: its run goes on under the same id, with the task runPresets made */
+  function adoptDevelopment(id, task) {
+    const kept = keptDevelopment.get(id);
+    if (!kept) throw new Error('넘겨받은 실행을 찾을 수 없습니다.');
+    keptDevelopment.delete(id);
+    const directory = requireLocalDirectory(task.cwd);
+    const url = typeof kept.development.url === 'string' && LOOPBACK_URL.test(kept.development.url) ? kept.development.url : null;
+    const entry = {
+      cwd: directory, launchDirectory: directory, cols: kept.cols, rows: kept.rows, developmentTask: task,
+      development: { taskId: task.id, name: task.name, label: task.label ?? task.name, runPreset: true, url },
+      backlog: kept.buffer, exited: true, exitCode: null, adopted: true
+    };
+    shells.set(id, entry);
+    launchDevelopment(id, entry, { pty: kept.pty, ...kept.take() });
+  }
+
+  /** A kept server whose run preset is gone or moved: it ends, with everything it started */
+  function dropKeptDevelopment(id) {
+    const kept = keptDevelopment.get(id);
+    if (!kept) return;
+    keptDevelopment.delete(id);
+    kept.take();
+    if (Number.isInteger(kept.pid) && kept.pid > 0) killTrees([kept.pid]);
+    host.forget?.(id);
+  }
+
   function adopt(kept) {
     const adopted = [];
     for (const shell of Array.isArray(kept) ? kept : []) {
       const number = /^local:(\d{1,9})$/.exec(shell?.id ?? '')?.[1];
       if (!number || shells.has(shell.id) || shell.exited) continue;
+      if (shell.meta && typeof shell.meta === 'object' && shell.meta.development !== undefined) {
+        keepDevelopment(shell, number);
+        continue;
+      }
       const meta = shell.meta && typeof shell.meta === 'object' ? shell.meta : {};
       const pick = value => (typeof value === 'string' && path.isAbsolute(value) ? value : null);
       const agent = ['claude', 'codex'].includes(meta.agent) ? meta.agent : undefined;
@@ -1327,8 +1393,19 @@ function createLocalShells({
    * told to wait for it before the quit began); every other shell ends with its whole tree, as before.
    */
   function handOver() {
+    const endHosted = [];
     for (const [id, entry] of shells) {
       if (!entry.pty?.hosted || entry.exited) continue;
+      if (entry.development) {
+        const run = developmentHandover(entry);
+        if (!run) { endHosted.push(id); continue; }
+        host.setMeta(id, {
+          cwd: entry.cwd, launchDirectory: entry.launchDirectory,
+          development: { taskId: entry.developmentTask.id, name: entry.development.name, label: entry.development.label,
+            cwd: entry.launchDirectory, url: entry.development.url ?? null, logEncoding: entry.developmentRuntime.logEncoding ?? null, run }
+        });
+        continue;
+      }
       // The launch folder stays apart from what the screen reported: only the verified launch folder
       // (launchIdentity, checked again by adopt) grants run_* authority. dev/ino are BigInt, sent as text.
       const identity = entry.launchIdentity;
@@ -1342,7 +1419,7 @@ function createLocalShells({
         modes: { ...entry.modes }
       });
     }
-    const staying = [...shells].filter(([, entry]) => !entry.pty?.hosted);
+    const staying = [...shells].filter(([id, entry]) => !entry.pty?.hosted || endHosted.includes(id));
     const pids = staying.filter(([, entry]) => !entry.exited && Number.isInteger(entry.pty?.pid) && entry.pty.pid > 0).map(([, entry]) => entry.pty.pid);
     if (pids.length > 0) killTrees(pids);
     for (const [id] of staying) close(id);
@@ -1353,11 +1430,12 @@ function createLocalShells({
     send('local-shell-development-state', { id, development: entry.development });
   }
 
-  function launchDevelopment(id, entry) {
+  // adopted: a server the app before an update handed over ({ pty, pending, exit }): no start, no spawn, its run goes on
+  function launchDevelopment(id, entry, adopted) {
     const task = entry.developmentTask;
-    task.onEvent?.({ type: 'start', shellId: id, phase: task.preparation ? 'prepare' : 'server' });
+    if (!adopted) task.onEvent?.({ type: 'start', shellId: id, phase: task.preparation ? 'prepare' : 'server' });
     entry.developmentInterrupted = false;
-    setDevelopment(id, entry, { status: 'starting', url: null, exitCode: null });
+    setDevelopment(id, entry, adopted ? { status: 'starting', exitCode: null } : { status: 'starting', url: null, exitCode: null });
     const launch = new AbortController();
     const { signal } = launch;
     const exit = Promise.withResolvers();
@@ -1416,16 +1494,26 @@ function createLocalShells({
       }
     }
 
-    function launchProcess(currentTask, phase) {
+    // A run preset's server opens in the session host (Windows), so it can outlive an app restarting for an
+    // update. The build step and other development tasks stay in the app: they are short or end with it.
+    function openDevelopmentPty(currentTask, phase, taskEnv) {
+      const args = developmentShellArgs(shell, currentTask, platform);
+      const options = { name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory, env: taskEnv };
+      if (phase === 'server' && (currentTask.runPreset || task.runPreset) && platform === 'win32' && host?.ready()) {
+        return host.spawn(id, shell.file, args, options, { development: true });
+      }
+      return spawn(shell.file, args, { ...options, ...(platform !== 'win32' && currentTask.logEncoding !== undefined && { encoding: null }) });
+    }
+
+    function launchProcess(currentTask, phase, kept) {
       const taskEnv = developmentEnvironment(env, currentTask, platform);
       const decoder = createLogDecoder(currentTask.logEncoding);
-      const pty = spawn(shell.file, developmentShellArgs(shell, currentTask, platform), {
-        name: TERMINAL_TYPE, cols: entry.cols, rows: entry.rows, cwd: entry.launchDirectory, env: taskEnv,
-        ...(platform !== 'win32' && currentTask.logEncoding !== undefined && { encoding: null })
-      });
+      const pty = kept?.pty ?? openDevelopmentPty(currentTask, phase, taskEnv);
       entry.pty = pty;
+      entry.developmentRuntime = currentTask;
+      entry.developmentPhase = phase;
       let fragment = '';
-      pty.onData(raw => {
+      const onData = raw => {
         if (!active() || entry.pty !== pty) return;
         const decoded = decoder.write(raw);
         const data = currentTask.filterOutput ? currentTask.filterOutput(decoded) : decoded;
@@ -1435,22 +1523,38 @@ function createLocalShells({
         fragment = lines.pop().slice(-2048);
         const url = developmentAddress(lines);
         if (url) setDevelopment(id, entry, { url });
-      });
-      pty.onExit(({ exitCode }) => {
+      };
+      const onExit = ({ exitCode }) => {
+        // The host holds an ended shell under its id and refuses a new one there: a restart in this tab reuses it
+        if (pty.hosted) host?.forget?.(id);
         if (!active() || entry.pty !== pty) return;
         const remaining = decoder.finish();
         forward(currentTask.filterOutput ? currentTask.filterOutput(remaining, true) : remaining, phase);
         if (phase === 'prepare' && exitCode === 0 && !stopAction() && shells.get(id) === entry) void startAfterPreparation();
         else finish(exitCode, phase);
-      });
+      };
+      pty.onData(onData);
+      pty.onExit(onExit);
+      // What a kept server printed (or how it ended) between the new app's start and this run being checked
+      for (const raw of kept?.pending ?? []) onData(raw);
+      if (kept?.exit) onExit(kept.exit);
       if (phase === 'server' && active()) {
         if (currentTask.hotReload || currentTask.hotReloadFailure || currentTask.expectedUrl) {
-          (currentTask.onEvent ?? task.onEvent)?.({ type: 'launched', shellId: id, pid: pty.pid, env: taskEnv });
+          const launched = pid => {
+            if (active() && entry.pty === pty) (currentTask.onEvent ?? task.onEvent)?.({ type: 'launched', shellId: id, pid, env: taskEnv });
+          };
+          // A server in the session host has its pid once the host answered (hot reload checks the JDWP listener's owner by it)
+          if (pty.hosted && !(pty.pid > 0)) void pty.spawned.then(pid => { if (pid > 0) launched(pid); });
+          else launched(pty.pid);
         }
         setDevelopment(id, entry, { status: 'running', ...(currentTask.expectedUrl && { url: currentTask.expectedUrl }) });
       }
     }
 
+    if (adopted) {
+      launchProcess(task, 'server', adopted);
+      return;
+    }
     try {
       if (task.launchNotice) forward(`\r\n${task.launchNotice}\r\n`, 'launch');
       if (task.preparation?.run) void prepareInMain();
@@ -1491,7 +1595,7 @@ function createLocalShells({
     const id = `local:${nextId++}`;
     const entry = {
       cwd: directory, launchDirectory: directory, cols: size(cols, 80), rows: size(rows, 24),
-      developmentTask: task, development: { taskId: task.id, name: task.name, label },
+      developmentTask: task, development: { taskId: task.id, name: task.name, label, ...(task.runPreset && { runPreset: true }) },
       backlog: '', exited: true, exitCode: null
     };
     shells.set(id, entry);
@@ -1506,9 +1610,16 @@ function createLocalShells({
       .finally(() => { entry.developmentStop = null });
   }
 
-  function drainDevelopmentTasks() {
+  /** What an update hands over for this run, or null: only a run preset's server running in the session host */
+  function developmentHandover(entry) {
+    if (entry.exited || !entry.pty?.hosted || entry.developmentPhase !== 'server' || entry.developmentAction) return null;
+    try { return entry.developmentRuntime?.handover?.() ?? null } catch { return null }
+  }
+
+  /** keepHosted: quitting to install an update, so a server the session host keeps for the next app goes on */
+  function drainDevelopmentTasks({ keepHosted = false } = {}) {
     developmentClosing = true;
-    const active = [...shells.values()].filter(entry => entry.development && !entry.exited);
+    const active = [...shells.values()].filter(entry => entry.development && !entry.exited && !(keepHosted && developmentHandover(entry)));
     if (!active.length) return waitRunCleanup();
     return Promise.allSettled(active.map(async entry => {
       await stopDevelopmentEntry(entry).catch(() => {});
@@ -1620,9 +1731,9 @@ function createLocalShells({
     }
   }
 
-  function close(id) {
+  function close(id, { keepRunPreset = false } = {}) {
     const entry = shells.get(id);
-    if (!entry) return;
+    if (!entry || (keepRunPreset && entry.development?.runPreset)) return;
     shells.delete(id);
     if (entry.development) {
       entry.developmentTask.onEvent?.({ type: 'closed', shellId: id, wasRunning: !entry.exited });
@@ -1805,7 +1916,7 @@ function createLocalShells({
   }
 
   return {
-    open, openDevelopmentTask, changeDevelopmentTask, drainDevelopmentTasks, attach, write, pasteClipboardImage, resize, close, closeAll, adopt, handOver, bindAgentProcess, reportAntigravityStatus, currentDirectory, runAuthorityDirectory,
+    open, openDevelopmentTask, changeDevelopmentTask, drainDevelopmentTasks, takeKeptDevelopment, adoptDevelopment, dropKeptDevelopment, attach, write, pasteClipboardImage, resize, close, closeAll, adopt, handOver, bindAgentProcess, reportAntigravityStatus, currentDirectory, runAuthorityDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.

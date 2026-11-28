@@ -73,8 +73,6 @@ export const useRunPresets = create<RunPresetState>(() => ({ worktrees: {}, alia
 
 /** Crashes already told (by the run: preset, worktree and start time) */
 const told = new Set<string>()
-/** Presets the user started from a card: their tab comes to the front once main gives the shell */
-const revealing = new Set<string>()
 /**
  * An agent's first action on a worktree whose card has not read its list yet (a folded project): told when
  * it does, so main's one-time notice is not lost. Bounded: the latest per preset.
@@ -232,11 +230,6 @@ function applyState(projectKey: string, worktreeKey: string, id: string, state: 
     return { worktrees: next, notices: nextNotices, agentNotices }
   })
   if (firstAgentAction) tellAgentAction({ projectKey, worktreeKey, id, state }, entry.folder)
-  const pending = stateKey(worktreeKey, id)
-  if (state.shellId && revealing.has(pending)) {
-    revealing.delete(pending)
-    revealRunShell({ shellId: state.shellId, label: preset?.name ?? '실행' })
-  }
 }
 
 /** Follows main's state changes; once per window after the first unlock. Returns the cleanup. */
@@ -270,7 +263,6 @@ export const dropDraft = (key: string) => { drafts.delete(key) }
 
 /** Clears what the store mirrors and keeps (the app locked) */
 export function clearRunPresets() {
-  revealing.clear()
   drafts.clear()
   unseen.clear()
   pendingAnswer?.(false)
@@ -331,9 +323,6 @@ export async function runPresetAction(folder: string, action: Action, id?: strin
       case 'cancelOrder': return api.runStartOrderResume?.(folder, 'cancel')
     }
   }
-  const entry = worktreeRuns(folder)
-  const pending = id && entry ? stateKey(entry.worktreeKey, id) : null
-  if (pending && (action === 'start' || action === 'restart')) revealing.add(pending)
   // 모두 실행 asks about each preset in turn (main keeps up to 50, each may ask for its command and its
   // install): the bound only keeps a confused answer from looping
   for (let round = 0; round < 120; round++) {
@@ -349,10 +338,7 @@ export async function runPresetAction(folder: string, action: Action, id?: strin
     }
     if (result.needsDependencies) {
       const response = await askRunQuestion('dependencies', result.needsDependencies.join('\n'))
-      if (!response) {
-        if (pending) revealing.delete(pending)
-        return false
-      }
+      if (!response) return false
       options = { dependencies: response === true ? 'include' : 'only' }
       continue
     }
@@ -370,7 +356,6 @@ export async function runPresetAction(folder: string, action: Action, id?: strin
     }
     const error = result.ok === true ? null : runError(result)
     if (error !== null) {
-      if (pending) revealing.delete(pending)
       toast.error(FAILED[action], error || undefined)
       return false
     }

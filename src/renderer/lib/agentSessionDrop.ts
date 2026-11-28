@@ -44,7 +44,7 @@ export function draggedAgentSession(): ResumeAgentSessionRequest | null {
 export const NOT_LOCAL = '에이전트 대화는 로컬 터미널 탭에서만 이어서 열 수 있습니다.'
 const PANE_CHANGED = '이 칸의 셸이 바뀌었습니다. 다시 끌어 놓아 주세요.'
 
-interface AgentPaneReplacement {
+export interface AgentPaneReplacement {
   pane: PaneId
   shellId: string
 }
@@ -114,21 +114,34 @@ export function agentDropAt(x: number, y: number): AgentDropHover | null {
 export type AgentDropResult = { ok: true } | { ok: false; error: string }
 
 /** Keep the pane and its geometry. Start the new shell before giving up the old one. */
-export async function replaceAgentPane(request: ResumeAgentSessionRequest, targetId: string, replacement: AgentPaneReplacement): Promise<AgentDropResult> {
+export function replaceAgentPane(request: ResumeAgentSessionRequest, targetId: string, replacement: AgentPaneReplacement): Promise<AgentDropResult> {
+  const open = window.electronAPI.localShellOpen
+  if (!open) return Promise.resolve({ ok: false, error: '앱을 다시 시작한 뒤에 쓸 수 있습니다.' })
+  return swapPaneShell(targetId, replacement, () => open({ cols: 80, rows: 24, resume: request.key, replacementFor: replacement.shellId }))
+}
+
+type OpenedShell = { success: true; id: string; name: string; cwd?: string } | { success: false; error: string }
+
+/**
+ * Puts the shell `open` starts (main opens it with `replacementFor`) where the pane's shell was, then
+ * closes the old one. Also used to continue a Claude conversation under another account.
+ */
+export async function swapPaneShell(targetId: string, replacement: AgentPaneReplacement, open: () => Promise<OpenedShell>,
+  changedError = PANE_CHANGED): Promise<AgentDropResult & { id?: string }> {
   const { pane, shellId } = replacement
   const currentTab = () => {
     const tab = useTerminalStore.getState().terminals.get(targetId)
     return tab?.local && paneIds(tab.splitTree ?? singlePane()).includes(pane) && getLocalPaneShellId(targetId, pane) === shellId ? tab : undefined
   }
-  if (!currentTab()) return { ok: false, error: PANE_CHANGED }
+  if (!currentTab()) return { ok: false, error: changedError }
   const api = window.electronAPI
-  if (!api.localShellOpen || !api.localShellClose) return { ok: false, error: '앱을 다시 시작한 뒤에 쓸 수 있습니다.' }
-  const opened = await api.localShellOpen({ cols: 80, rows: 24, resume: request.key, replacementFor: shellId })
+  if (!api.localShellClose) return { ok: false, error: '앱을 다시 시작한 뒤에 쓸 수 있습니다.' }
+  const opened = await open()
   if (!opened.success) return { ok: false, error: opened.error }
   const tab = currentTab()
   if (!tab?.local) {
     api.localShellClose(opened.id)
-    return { ok: false, error: PANE_CHANGED }
+    return { ok: false, error: changedError }
   }
 
   const store = useTerminalStore.getState()
@@ -139,7 +152,7 @@ export async function replaceAgentPane(request: ResumeAgentSessionRequest, targe
   })
   api.localShellClose(shellId)
   focusTabPane(store.focusTerminal, targetId, pane)
-  return { ok: true }
+  return { ok: true, id: opened.id }
 }
 
 /** Resumes the session in a new pane of a local terminal tab */

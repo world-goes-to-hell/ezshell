@@ -96,7 +96,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   const [cursor, setCursor] = useState<CursorInfo>({ line: 1, column: 1, selected: 0 })
   // The answer last shown: main moves on only when a look names its cursor (a dropped answer comes again)
   const followRef = useRef(file.follow)
-  const name = fileNameOf(file.path)
+  const name = fileNameOf(file.path, file.local)
   // Up to 5MB: converted once, the editor reads it only when it is made
   const initialText = useMemo(() => toEditorText(file.content), [file.content])
 
@@ -196,11 +196,12 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
 
   const handle = useCallback((result: RemoteFileTailResult) => {
     // 'busy': a look still runs; 'stale': from before a refresh (this view is about to be replaced)
-    if (result.cursor === undefined) return
+    const taken = followRef.current
+    if (result.cursor === undefined || !taken) return
     const note = result.status === 'missing' ? '파일이 없어 다시 생기기를 기다립니다' : undefined
     setFollow(previous => (previous.kind === 'live' && previous.note === note ? previous : { kind: 'live', note }))
     if ('text' in result) showAdded(result)
-    followRef.current = { ...followRef.current, cursor: result.cursor }
+    followRef.current = { ...taken, cursor: result.cursor }
   }, [showAdded])
   const handleRef = useRef(handle)
   handleRef.current = handle
@@ -222,6 +223,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
         setFollow({ kind: 'error', message: '앱을 다시 시작한 뒤에 사용할 수 있습니다' })
         return
       }
+      if (!followRef.current) return
       const { generation, cursor: taken } = followRef.current
       const result = await tail(docId, generation, taken).catch(() => ({ success: false as const, error: '파일을 읽지 못했습니다.' }))
       // Paused or closed meanwhile: the answer is not shown, so its cursor is not passed on (main sends it again)
@@ -327,7 +329,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
   const scopeMarker = outline.markers.find(marker => marker.id === afterMarkerId)
   const actions = (
     <>
-      <button
+      {file.follow && <button
         type="button"
         className={`title-bar-btn popout-title-action${isLive ? ' is-active' : ''}`}
         onClick={toggleLive}
@@ -336,7 +338,7 @@ export function RemoteLogView({ docId, file, onRefresh }: RemoteLogViewProps) {
         aria-pressed={isLive}
       >
         {isLive ? <RiPauseLine size={16} /> : <RiPlayLine size={16} />}
-      </button>
+      </button>}
       <button type="button" className="title-bar-btn popout-title-action" onClick={markNow} title="기준점 찍기 (Ctrl+M): 지금 로그 끝에 표시하고, 이후 줄은 그 아래로 쌓입니다. 줄 번호를 눌러 그 줄에도 찍을 수 있습니다" aria-label="기준점 찍기">
         <RiFlagLine size={16} />
       </button>

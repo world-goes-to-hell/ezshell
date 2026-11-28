@@ -14,7 +14,12 @@ const PAW_CAP = 30
 export const DESKTOP_TRAIL_CAP = 132
 
 /** How far the pointer goes before a moving effect adds its next particles (the trails add every point) */
-export const MOVE_DISTANCE = { sparkle: 12, bubble: 26, petal: 20, ghost: 16, pixel: 8, paw: 46 } as const
+export const MOVE_DISTANCE = {
+  sparkle: 12, bubble: 26, petal: 20, ghost: 16, pixel: 8, paw: 46,
+  snow: 22, notes: 30, wind: 18, firefly: 16
+} as const
+const MOVE_LIFE = { snow: 1250, notes: 860, wind: 390, firefly: 1020 } as const
+const CLICK_LIFE = { square: 660, orbit: 730, shutter: 510, bloom: 750 } as const
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Particle = { k: string; t0: number; life: number; [field: string]: any }
@@ -99,50 +104,50 @@ export function addMove(S: EffectState, effect: MoveEffect, x: number, y: number
   }
   if (effect === 'none' || !visible) return
   const A = S.move
-  const distance = Math.hypot(x - S.lastX, y - S.lastY)
-  const colors = palette(ink, dark)
   const L = level
   if (effect === 'rainbow' || effect === 'comet') {
     put(A, { k: 'tr', v: effect, x, y, t0: now, life: 480 }, trailCap)
     S.lastX = x; S.lastY = y
     return
   }
-  if (effect === 'sparkle' && distance > MOVE_DISTANCE.sparkle) {
-    S.lastX = x; S.lastY = y
+  const dx = x - S.lastX
+  const dy = y - S.lastY
+  if (Math.hypot(dx, dy) <= MOVE_DISTANCE[effect]) return
+  const angle = (effect === 'paw' || effect === 'wind') && S.lastX > -90 ? Math.atan2(dy, dx) : 0
+  S.lastX = x; S.lastY = y
+  if (effect === 'sparkle') {
+    const colors = palette(ink, dark)
     for (let i = 0; i < L; i++) {
       put(A, { k: 'sp', x: x + (random() - 0.5) * 8, y: y + (random() - 0.5) * 8, vx: (random() - 0.5) * 0.7, vy: 0.15 + random() * 0.5,
         t0: now, life: 520 + random() * 420, size: 3 + random() * (2 + L * 1.6), rot: random() * 6, paint: particlePaint(colors[random() * 4 | 0]) }, MOVE_CAP)
     }
-  } else if (effect === 'bubble' && distance > MOVE_DISTANCE.bubble) {
-    S.lastX = x; S.lastY = y
+  } else if (effect === 'bubble') {
     for (let i = 0, n = L > 2 ? 2 : 1; i < n; i++) {
       put(A, { k: 'bu', x: x + (random() - 0.5) * 10, y, vx: (random() - 0.5) * 0.3, vy: -(0.35 + random() * 0.5), ph: random() * 6,
         r: 4 + random() * (4 + L * 2), t0: now, life: 950 + random() * 500 }, MOVE_CAP)
     }
-  } else if (effect === 'petal' && distance > MOVE_DISTANCE.petal) {
-    S.lastX = x; S.lastY = y
+  } else if (effect === 'petal') {
     for (let i = 0, n = L > 1 ? 2 : 1; i < n; i++) {
       put(A, { k: 'pe', x: x + (random() - 0.5) * 10, y: y + (random() - 0.5) * 6, vx: (random() - 0.5) * 0.5, vy: 0.35 + random() * 0.45,
         ph: random() * 6, rot: random() * 6, vr: (random() - 0.5) * 0.08, size: 3.5 + random() * (2 + L),
         color: random() < 0.5 ? '#ff9fc0' : '#ffd0e0', t0: now, life: 1100 + random() * 600 }, MOVE_CAP)
     }
-  } else if (effect === 'ghost' && distance > MOVE_DISTANCE.ghost) {
-    S.lastX = x; S.lastY = y
+  } else if (effect === 'ghost') {
     const cursor = ghost?.()
     if (cursor) put(A, { k: 'gh', x, y, t0: now, life: 240 + L * 70, cursor }, GHOST_CAP)
-  } else if (effect === 'pixel' && distance > MOVE_DISTANCE.pixel) {
-    S.lastX = x; S.lastY = y
+  } else if (effect === 'pixel') {
     for (let i = 0; i < L; i++) {
       put(A, { k: 'px', x: x + (random() - 0.5) * 8, y: y + (random() - 0.5) * 8, vx: (random() - 0.5) * 0.8, vy: -0.2 + random() * 0.6,
         s: 2 * (1 + (random() * 2 | 0)), paint: particlePaint([ink, dark ? '#fff' : '#222', '#ff3b6b', '#ffd23f'][random() * 4 | 0]),
         t0: now, life: 380 + random() * 260 }, MOVE_CAP)
     }
-  } else if (effect === 'paw' && distance > MOVE_DISTANCE.paw) {
-    const angle = S.lastX > -90 ? Math.atan2(y - S.lastY, x - S.lastX) : 0
-    S.lastX = x; S.lastY = y
+  } else if (effect === 'paw') {
     S.side *= -1
     put(A, { k: 'pw', x: x + Math.cos(angle + 1.5708) * 7 * S.side, y: y + Math.sin(angle + 1.5708) * 7 * S.side, ang: angle,
       sc: 0.8 + L * 0.2, t0: now, life: 1200 }, PAW_CAP)
+  } else {
+    put(A, { k: effect, x, y, ang: angle, ph: random() * Math.PI * 2, s: 3 + L + random() * 2,
+      t0: now, life: MOVE_LIFE[effect] }, MOVE_CAP)
   }
 }
 
@@ -183,6 +188,24 @@ export function addClick(S: EffectState, effect: ClickEffect | 'rs', x: number, 
       const blobs = []
       for (let i = 0, n = 4 + L * 2; i < n; i++) blobs.push({ dx: (random() - 0.5) * (26 + L * 8), dy: (random() - 0.5) * (26 + L * 8), r: 6 + random() * (8 + L * 3) })
       put(A, { k: 'ik', x, y, bl: blobs, t0: now, life: 800 }, CLICK_CAP)
+      break
+    }
+    case 'square':
+    case 'orbit':
+    case 'shutter':
+    case 'bloom':
+      put(A, { k: effect, x, y, t0: now, life: CLICK_LIFE[effect] }, CLICK_CAP)
+      break
+    case 'confetti': {
+      const colors = ['#ff746d', '#ffd56a', '#55d9c4', '#879aff', '#e3a2fa']
+      const count = 6 + L * 3
+      for (let i = 0; i < count; i++) {
+        const angle = -Math.PI * (0.12 + 0.76 * i / (count - 1))
+        const speed = 1.4 + random() * (1.2 + L * 0.25)
+        put(A, { k: 'confetti', x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, spin: (random() - 0.5) * 10,
+          ph: random() * Math.PI * 2, s: 2.5 + L + random() * 2, paint: particlePaint(colors[i % colors.length]),
+          t0: now, life: 630 + random() * 260 }, CLICK_CAP)
+      }
       break
     }
   }
@@ -287,6 +310,65 @@ function drawMove(ctx: CanvasRenderingContext2D, S: EffectState, now: number, dt
         fillEffect(ctx, c.dark ? '#ec96b2' : '#cd6487', DARK_OUTLINE)
         ctx.restore()
         break
+      case 'snow': {
+        ctx.save()
+        ctx.translate(it.x + Math.sin(u * 6 + it.ph) * 5, it.y + u * 24)
+        ctx.rotate(it.ph + u)
+        ctx.beginPath()
+        for (let i = 0; i < 3; i++) {
+          const a = i * Math.PI / 3
+          const x = Math.cos(a) * it.s
+          const y = Math.sin(a) * it.s
+          ctx.moveTo(-x, -y); ctx.lineTo(x, y)
+        }
+        strokeEffect(ctx, 1.4, c.dark ? '#cceaff' : '#367599', c.dark ? DARK_OUTLINE : '#fff', 0.95 * (1 - u))
+        ctx.restore()
+        break
+      }
+      case 'notes': {
+        const r = it.s
+        ctx.save()
+        ctx.translate(it.x + Math.sin(u * 4 + it.ph) * 4, it.y - u * 22)
+        ctx.rotate(Math.sin(it.ph) * 0.22)
+        ctx.globalAlpha = 1 - u
+        ctx.beginPath()
+        ctx.ellipse(-r * 0.22, r * 0.38, r * 0.49, r * 0.34, -0.35, 0, Math.PI * 2)
+        ctx.moveTo(r * 0.19, r * 0.36); ctx.lineTo(r * 0.19, -r)
+        ctx.quadraticCurveTo(r * 0.39, -r * 0.65, r * 0.8, -r * 0.58)
+        ctx.lineTo(r * 0.8, -r * 0.3); ctx.quadraticCurveTo(r * 0.5, -r * 0.38, r * 0.34, -r * 0.52)
+        ctx.lineTo(r * 0.34, r * 0.36); ctx.closePath()
+        fillEffect(ctx, ink, outline)
+        ctx.restore()
+        break
+      }
+      case 'wind':
+        ctx.save()
+        ctx.translate(it.x, it.y)
+        ctx.rotate(it.ang)
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        for (let i = -1; i <= 1; i++) {
+          const x = -u * 13 - Math.abs(i) * 4
+          const y = i * 4
+          ctx.moveTo(x - it.s * (i === 0 ? 2.8 : 1.6), y)
+          ctx.quadraticCurveTo(x - it.s, y, x, y - 2)
+        }
+        strokeEffect(ctx, 1.2 + L * 0.25, ink, outline, 0.8 * (1 - u))
+        ctx.restore()
+        break
+      case 'firefly': {
+        const x = it.x + (Math.sin(u * 7 + it.ph) - Math.sin(it.ph)) * 7
+        const y = it.y - u * 25
+        const light = (0.65 + 0.35 * Math.sin(u * 9 + it.ph)) * (1 - u)
+        const color = c.dark ? '#d5fb75' : '#617a26'
+        ctx.beginPath(); ctx.arc(x, y, it.s * 0.95, 0, Math.PI * 2)
+        ctx.fillStyle = rgba(color, light * 0.22); ctx.fill()
+        ctx.globalAlpha = light
+        ctx.beginPath(); ctx.arc(x, y, it.s * 0.31, 0, Math.PI * 2)
+        fillEffect(ctx, color, c.dark ? DARK_OUTLINE : '#fff')
+        ctx.globalAlpha = 1
+        break
+      }
     }
   }
   if (trail.length > 1) {
@@ -423,6 +505,73 @@ function drawClick(ctx: CanvasRenderingContext2D, S: EffectState, width: number,
         ctx.beginPath(); ctx.arc(it.x, it.y, 10 + e * 14, 0, 6.283)
         fillEffect(ctx, ink, outline)
         ctx.globalAlpha = 1
+        break
+      }
+      case 'square': {
+        const r = 5 + (1 - (1 - u) ** 3) * (16 + L * 4)
+        ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(0.12 + u * 0.4)
+        ctx.beginPath(); ctx.roundRect(-r, -r, r * 2, r * 2, 3)
+        strokeEffect(ctx, 1.8 + (1 - u) * 1.5, ink, outline, 1 - u)
+        ctx.restore()
+        break
+      }
+      case 'orbit': {
+        const r = (7 + L * 4) * (0.55 + 0.65 * u)
+        ctx.save(); ctx.translate(it.x, it.y); ctx.rotate(-0.42 + u * 0.6)
+        ctx.beginPath(); ctx.ellipse(0, 0, r, r * 0.56, 0, 0, Math.PI * 2)
+        strokeEffect(ctx, 1.35, ink, outline, 0.6 * (1 - u))
+        ctx.globalAlpha = 1 - u
+        for (let i = 0; i < 3; i++) {
+          const angle = (1.55 * u + i / 3) * Math.PI * 2
+          ctx.beginPath(); ctx.arc(r * Math.cos(angle), r * 0.56 * Math.sin(angle), 1.8 + L * 0.5, 0, Math.PI * 2)
+          fillEffect(ctx, i === 0 ? ink : c.dark ? '#e9f1ff' : '#3e6395', outline)
+        }
+        ctx.restore()
+        break
+      }
+      case 'confetti': {
+        const ticks = age / 16
+        const w = it.s * (0.2 + 0.8 * Math.abs(Math.cos(it.ph + u * 12)))
+        ctx.save()
+        ctx.translate(it.x + it.vx * ticks, it.y + it.vy * ticks + 0.045 * ticks * ticks)
+        ctx.rotate(it.ph + u * it.spin)
+        ctx.globalAlpha = 1 - u
+        ctx.beginPath(); ctx.rect(-w / 2, -it.s * 0.7, w, it.s * 1.4)
+        fillEffect(ctx, it.paint.color, it.paint.outline)
+        ctx.restore()
+        break
+      }
+      case 'shutter': {
+        const r = 9 + L * 2 + 9 * (1 - Math.min(1, u * 4))
+        const arm = 5 + L
+        ctx.beginPath()
+        for (const x of [-1, 1]) {
+          for (const y of [-1, 1]) {
+            ctx.moveTo(it.x + x * (r - arm), it.y + y * r)
+            ctx.lineTo(it.x + x * r, it.y + y * r)
+            ctx.lineTo(it.x + x * r, it.y + y * (r - arm))
+          }
+        }
+        strokeEffect(ctx, 2, ink, outline, 1 - u)
+        ctx.fillStyle = rgba(ink, 0.24 * (1 - u) ** 5)
+        ctx.fillRect(it.x - r + 3, it.y - r + 3, 2 * r - 6, 2 * r - 6)
+        break
+      }
+      case 'bloom': {
+        const e = 1 - (1 - u) ** 3
+        const r = 2 + e * (4 + L * 2)
+        const distance = 3 + e * (8 + L)
+        ctx.save()
+        ctx.globalAlpha = 1 - u
+        for (let i = 0; i < 6; i++) {
+          const a = i * Math.PI / 3 + u * 0.35
+          ctx.beginPath()
+          ctx.ellipse(it.x + Math.cos(a) * distance, it.y + Math.sin(a) * distance, r, r * 0.53, a, 0, Math.PI * 2)
+          fillEffect(ctx, i % 2 ? '#fa94b7' : '#e874a8', DARK_OUTLINE)
+        }
+        ctx.beginPath(); ctx.arc(it.x, it.y, 2 + e * 2, 0, Math.PI * 2)
+        fillEffect(ctx, '#ffda76', DARK_OUTLINE)
+        ctx.restore()
         break
       }
     }

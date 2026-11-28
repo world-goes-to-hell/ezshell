@@ -100,17 +100,16 @@ export function readReloadLayout(value: unknown): ReloadTab[] {
 }
 
 /**
- * Which running shells go back into which tab and pane. A tab comes back only with its own shell; a
- * pane whose shell is gone (or was given to another pane) is closed up. Shells not placed in a tab
- * (`loose`) come back as tabs of their own, as before.
+ * Restore the shells of the previous tabs and panes. Run preset logs appear only if their viewers
+ * were open. Other running shells without a previous tab get tabs of their own.
  */
 export function planReloadedTabs(shells: readonly LiveLocalShell[], saved: readonly ReloadTab[]): { tabs: ReloadTab[]; loose: LiveLocalShell[] } {
-  const alive = new Set(shells.filter(s => !s.exited).map(s => s.id))
+  const available = new Set(shells.filter(s => !s.exited || s.development?.runPreset).map(s => s.id))
   const claimed = new Set<string>()
   const claimedTabs = new Set<string>()
   const tabs: ReloadTab[] = []
   for (const tab of saved) {
-    if (!alive.has(tab.mainShellId) || claimed.has(tab.mainShellId) || claimedTabs.has(tab.tabId)) continue
+    if (!available.has(tab.mainShellId) || claimed.has(tab.mainShellId) || claimedTabs.has(tab.tabId)) continue
     claimed.add(tab.mainShellId)
     claimedTabs.add(tab.tabId)
     let tree = tab.splitTree
@@ -118,7 +117,7 @@ export function planReloadedTabs(shells: readonly LiveLocalShell[], saved: reado
     for (const pane of tree ? paneIds(tree) : []) {
       if (pane === MAIN_PANE) continue
       const id = tab.panes[pane]
-      if (id && alive.has(id) && !claimed.has(id)) {
+      if (id && available.has(id) && !claimed.has(id)) {
         claimed.add(id)
         panes[pane] = id
       } else if (tree) {
@@ -134,7 +133,7 @@ export function planReloadedTabs(shells: readonly LiveLocalShell[], saved: reado
       ...(chats.length ? { chats } : {})
     })
   }
-  return { tabs, loose: shells.filter(s => !s.exited && !claimed.has(s.id)) }
+  return { tabs, loose: shells.filter(s => !s.exited && !s.development?.runPreset && !claimed.has(s.id)) }
 }
 
 export function writeReloadLayout(tabs: readonly ReloadTab[]): void {

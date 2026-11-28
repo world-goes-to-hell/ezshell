@@ -5,8 +5,10 @@ const { isLocalFilePath } = require('../localKeyPath.js')
 const { sameOrInside } = require('../localFiles/roots.js')
 const { realDirectory } = require('./runPresetStore.js')
 const { redactRunSecrets } = require('./runSecrets.js')
-const { git, inspectLocalSettings, fetchCurrent, optionalGit, readBranches } = require('./nestedGit.js')
+const { git, inspectLocalSettings, fetchCurrent, optionalGit, readBranches, readRemotes, remoteAddress, remoteProblem,
+  trimLine } = require('./nestedGit.js')
 const { createNestedRepositoryTrust } = require('./nestedRepositoryTrust.js')
+const { MODES: CHECKOUT_MODES, overwrittenFiles, checkoutWithChanges } = require('./nestedCheckout.js')
 
 const FETCH_INTERVAL = 10 * 60_000
 const MAX_PARALLEL = 4
@@ -22,13 +24,26 @@ const SKIP_MESSAGES = {
 const CONFIRM_SETTINGS = '저장소 설정 확인 필요'
 const PARTIAL_CLONE = '부분 복제 · 원격 확인을 눌러 읽기'
 const READ_FAILED = 'Git 상태를 읽지 못했습니다.'
+const REMOTE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/
+const REMOTE_NOT_LISTED = '이 원격은 현재 목록에 없습니다. 목록을 다시 열어 주세요.'
 const samePath = (a, b) => path.relative(a, b) === ''
 const key = value => process.platform === 'win32' ? value.toLowerCase() : value
 const withinProject = (project, folder) => sameOrInside(key(project), key(folder))
 
+// The server asked for a login that Git could not give: none saved for this address (often a remote moved
+// from http:// to https://, which Git Credential Manager keeps apart), or a wrong one. Git runs here with its
+// prompts off (nestedGit.js), so the user logs in once from a terminal. The screen offers that
+// (lib/gitLogin.ts keys on this opening sentence: keep the two the same).
+const GIT_LOGIN_NEEDED = 'Git 로그인이 필요합니다.'
+const LOGIN_FAILURE = /could not read (?:Username|Password)|terminal prompts disabled|Authentication failed|HTTP Basic: Access denied|Invalid username or password/i
+
 function messageOf(error, fallback) {
   const message = error?.stderr?.trim() || (!error?.code && error?.message) || fallback
   if (/dubious ownership/i.test(message)) return '이 폴더의 소유자가 달라 Git이 읽기를 거부했습니다.'
+  if (LOGIN_FAILURE.test(message)) {
+    return `${GIT_LOGIN_NEEDED} 이 PC 에 이 주소의 로그인 정보가 없거나 맞지 않습니다. 터미널에서 한 번 로그인하면 저장되어 다음부터 쓰입니다. ` +
+      '(http 주소에 저장된 정보는 https 주소에 쓰이지 않습니다.)'
+  }
   return redactRunSecrets(stripVTControlCharacters(message))
     .replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 500) || fallback
 }
@@ -306,10 +321,13 @@ function createNestedRepositories({ discover, runGit = git, now = Date.now, conf
     })
   }
 
-  async function switchBranch(root, folder, { name, remote }, check) {
+  // mode: undefined tries a plain switch and returns { localChanges } when Git refuses over local edits;
+  // 'smart' / 'force' then switch with those edits (nestedCheckout.js).
+  async function switchBranch(root, folder, { name, remote }, check, { mode } = {}) {
     if (typeof name !== 'string' || !name || name.startsWith('-') || (remote !== undefined && typeof remote !== 'string')) {
       throw new Error('목록에서 바꿀 브랜치를 선택해 주세요.')
     }
+    if (mode !== undefined && !CHECKOUT_MODES.has(mode)) throw new Error('체크아웃 방식을 확인할 수 없습니다.')
     const directory = await discoveredRepository(root, folder, check)
     return queue(directory, async () => {
       const settings = await settingsOf(root, directory, check)
@@ -323,17 +341,112 @@ function createNestedRepositories({ discover, runGit = git, now = Date.now, conf
       if (!chosen) throw new Error('이 브랜치는 현재 목록에 없습니다. 목록을 다시 열어 주세요.')
       await runGit(directory, ['check-ref-format', '--branch', chosen.name])
       await settingsUnchanged(root, directory, settings, check)
-      if ((await readStatus(directory, runGit, 'no')).changed) {
-        throw new Error('수정하거나 스테이징한 파일이 있습니다. 변경을 정리한 뒤 브랜치를 바꿔 주세요.')
-      }
       check()
       const args = chosen.remote
         ? ['-c', chosen.name, '--track', '--', `refs/remotes/${chosen.remote}/${chosen.name}`]
         : ['--', chosen.name]
-      try { await runGit(directory, ['switch', '--no-guess', '--no-overwrite-ignore', ...args]) }
-      catch (error) { throw branchSwitchError(error, settings.partialClone) }
-      try { return publicStatus(root, directory, await readStatus(directory, runGit)) }
-      catch (error) { return { folder, path: directory, error: messageOf(error, READ_FAILED) } }
+      const switchNow = () => runGit(directory, ['switch', '--no-guess', '--no-overwrite-ignore', ...args])
+        .catch(error => { throw branchSwitchError(error, settings.partialClone) })
+      let checkout
+      if (mode) {
+        const from = trimLine(await optionalGit(directory, ['symbolic-ref', '--quiet', '--short', 'HEAD'], runGit)) || 'HEAD'
+        checkout = await checkoutWithChanges({ directory, runGit, mode, from, to: chosen.name, switchNow })
+      } else {
+        try { await runGit(directory, ['switch', '--no-guess', '--no-overwrite-ignore', ...args]) }
+        catch (error) {
+          const localChanges = overwrittenFiles(error.stderr)
+          if (localChanges) return { localChanges }
+          throw branchSwitchError(error, settings.partialClone)
+        }
+      }
+      try { return { ...publicStatus(root, directory, await readStatus(directory, runGit)), ...(checkout && { checkout }) } }
+      catch (error) { return { folder, path: directory, error: messageOf(error, READ_FAILED), ...(checkout && { checkout }) } }
+    })
+  }
+
+  // Remote addresses (2026-11-27 user request): see and fix an address fetching refuses, e.g. http://
+  function remoteTask(root, folder, check, { confirm = true } = {}, run) {
+    return discoveredRepository(root, folder, check).then(directory => queue(directory, async () => {
+      const settings = await settingsOf(root, directory, check)
+      if (!settings) throw new Error('하위 Git 저장소 경로를 확인할 수 없습니다.')
+      if (confirm && !await approveSettings(root, directory, settings, check)) throw new Error(CONFIRM_SETTINGS)
+      await verify(directory, check)
+      return run(directory, settings, await readRemotes(directory, runGit))
+    }))
+  }
+
+  const listedRemote = (listed, name) => {
+    const remote = typeof name === 'string' && !name.startsWith('-') && listed.find(item => item.name === name)
+    if (!remote) throw new Error(REMOTE_NOT_LISTED)
+    return remote
+  }
+
+  async function remoteResult(root, directory) {
+    const remotes = await readRemotes(directory, runGit)
+    try { return { remotes, status: publicStatus(root, directory, await readStatus(directory, runGit)) } }
+    catch (error) { return { remotes, status: { folder: relativeOf(root, directory), path: directory, error: messageOf(error, READ_FAILED) } } }
+  }
+
+  function remotes(root, folder, check) {
+    return remoteTask(root, folder, check, { confirm: false }, (directory, settings, listed) => listed)
+  }
+
+  function setRemote(root, folder, { name, url, pushUrl, add = false } = {}, check) {
+    if ((url !== undefined && typeof url !== 'string') || (pushUrl !== undefined && typeof pushUrl !== 'string') || typeof add !== 'boolean') {
+      return Promise.reject(new Error('원격 주소를 확인해 주세요.'))
+    }
+    return remoteTask(root, folder, check, {}, async (directory, settings, listed) => {
+      let current
+      if (add) {
+        if (typeof name !== 'string' || !REMOTE_NAME.test(name)) throw new Error('원격 이름은 영문, 숫자, 점, 밑줄, 하이픈만 쓸 수 있습니다.')
+        if (listed.some(remote => remote.name.toLowerCase() === name.toLowerCase())) throw new Error('이미 있는 원격 이름입니다.')
+        if (url === undefined) throw new Error('원격 주소를 확인해 주세요.')
+      } else {
+        current = listedRemote(listed, name)
+      }
+      const address = url === undefined ? undefined : await remoteAddress(directory, url)
+      const push = pushUrl === undefined || pushUrl.trim() === '' ? pushUrl?.trim() : await remoteAddress(directory, pushUrl)
+      await settingsUnchanged(root, directory, settings, check)
+      check()
+      if (address !== undefined) await runGit(directory, ['remote', add ? 'add' : 'set-url', '--', name, address])
+      if (push === '' && current?.pushUrl !== undefined) {
+        await runGit(directory, ['config', '--local', '--unset-all', `remote.${name}.pushurl`])
+      } else if (push) {
+        await runGit(directory, ['config', '--local', '--replace-all', `remote.${name}.pushurl`, push])
+      }
+      return remoteResult(root, directory)
+    })
+  }
+
+  function removeRemote(root, folder, { name } = {}, check) {
+    return remoteTask(root, folder, check, {}, async (directory, settings, listed) => {
+      listedRemote(listed, name)
+      await settingsUnchanged(root, directory, settings, check)
+      check()
+      await runGit(directory, ['remote', 'remove', '--', name])
+      return remoteResult(root, directory)
+    })
+  }
+
+  /** Whether the server answers at an address (typed, or a saved remote's) before keeping it */
+  function testRemote(root, folder, { name, url } = {}, check) {
+    return remoteTask(root, folder, check, {}, async (directory, settings, listed) => {
+      let target
+      if (url !== undefined) {
+        target = await remoteAddress(directory, url)
+      } else {
+        const remote = listedRemote(listed, name)
+        const vcs = trimLine(await optionalGit(directory, ['config', '--local', '--get', `remote.${name}.vcs`], runGit))
+        const saved = trimLine(await runGit(directory, ['config', '--local', '--get', `remote.${name}.url`]))
+        const problem = await remoteProblem(directory, { url: saved, vcs })
+        if (problem) throw new Error(problem)
+        target = remote.name
+      }
+      const sshCommand = trimLine(await optionalGit(directory, ['config', '--get', 'core.sshCommand'], runGit))
+      await settingsUnchanged(root, directory, settings, check)
+      check()
+      const output = await runGit(directory, ['ls-remote', '--heads', '--', target], { network: true, sshCommand, timeout: 30_000 })
+      return { heads: output.split(/\r?\n/).filter(Boolean).length }
     })
   }
 
@@ -383,7 +496,7 @@ function createNestedRepositories({ discover, runGit = git, now = Date.now, conf
     return { ...state, target }
   }
 
-  return { status, pull, branches, switchBranch }
+  return { status, pull, branches, switchBranch, remotes, setRemote, removeRemote, testRemote }
 }
 
 async function resolveRoot(folder) {
@@ -498,9 +611,19 @@ function registerNestedRepositoryIpc({ ipcMain, fromMainWindow, isLocked, discov
   handle('local-nested-repository-branches', '브랜치 목록을 읽지 못했습니다.', async ({ project, root, folder } = {}, check) => ({
     branches: await service.branches(await branchRoot(project, root, folder), folder, check)
   }))
-  handle('local-nested-repository-switch-branch', '브랜치를 바꾸지 못했습니다.', async ({ project, root, folder, branch } = {}, check) => ({
-    status: await service.switchBranch(await branchRoot(project, root, folder), folder, branch ?? {}, check)
+  handle('local-nested-repository-remotes', '원격 목록을 읽지 못했습니다.', async ({ project, root, folder } = {}, check) => ({
+    remotes: await service.remotes(await branchRoot(project, root, folder), folder, check)
   }))
+  handle('local-nested-repository-set-remote', '원격 주소를 저장하지 못했습니다.', async ({ project, root, folder, remote } = {}, check) =>
+    service.setRemote(await branchRoot(project, root, folder), folder, remote ?? {}, check))
+  handle('local-nested-repository-remove-remote', '원격을 지우지 못했습니다.', async ({ project, root, folder, name } = {}, check) =>
+    service.removeRemote(await branchRoot(project, root, folder), folder, { name }, check))
+  handle('local-nested-repository-test-remote', '원격 연결을 확인하지 못했습니다.', async ({ project, root, folder, target } = {}, check) =>
+    service.testRemote(await branchRoot(project, root, folder), folder, { name: target?.name, url: target?.url }, check))
+  handle('local-nested-repository-switch-branch', '브랜치를 바꾸지 못했습니다.', async ({ project, root, folder, branch, mode } = {}, check) => {
+    const { localChanges, checkout, ...status } = await service.switchBranch(await branchRoot(project, root, folder), folder, branch ?? {}, check, { mode })
+    return localChanges ? { localChanges } : { status, ...(checkout && { checkout }) }
+  })
 }
 
 module.exports = { createNestedRepositories, parseStatus, registerNestedRepositoryIpc }

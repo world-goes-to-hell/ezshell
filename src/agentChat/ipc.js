@@ -11,12 +11,19 @@ const { createImageDrafts } = require('./imageDrafts.js')
 const { cleanAnswer } = require('./askQuestions.js')
 const { prepareHandoff } = require('./handoff.js')
 const { messagePrompt, MESSAGE_ID } = require('../ipc/agentInboxPrompts.js')
+const { isLocalFilePath } = require('../localKeyPath.js')
 
 const SHELL_ID = /^local:\d+$/
 const MAX_TEXT = 16_000
 const CHAT_PROVIDERS = new Set(['claude', 'codex', 'antigravity'])
 const MCP_SERVER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/
 const staleMcpSummary = { ok: false, error: '이 에이전트의 최신 /mcp 결과를 다시 확인해 주세요.' }
+// Pictures dropped on the chat (lib/droppedFiles.ts CHAT_IMAGE_FILE): paths of this PC only. A network path
+// would make Windows send its credentials and a device path may never finish reading (CLAUDE.md)
+const DROPPED_IMAGE = /\.(png|jpe?g)$/i
+const MAX_DROPPED_IMAGES = 8
+const droppedImagePaths = paths => Array.isArray(paths) && paths.length >= 1 && paths.length <= MAX_DROPPED_IMAGES
+  && paths.every(item => typeof item === 'string' && item.length <= 4096 && isLocalFilePath(item) && DROPPED_IMAGE.test(item)) ? [...paths] : null
 const antigravityOnlyText = { ok: false, reason: 'unsupported', error: 'Antigravity 채팅에서는 일반 텍스트만 보낼 수 있습니다.' }
 const antigravityTerminal = { ok: false, reason: 'unsupported', error: 'Antigravity의 확인 요청은 터미널에서 처리해 주세요.' }
 
@@ -167,8 +174,10 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
     }
   }
 
-  async function readAttachments(event, shellId, source) {
+  async function readAttachments(event, shellId, source, dropped) {
     if (!allowed(event)) return locked
+    const droppedPaths = source === 'drop' ? droppedImagePaths(dropped) : null
+    if (source === 'drop' && !droppedPaths) return { ok: false, error: '이 PC 의 PNG·JPG 이미지만 첨부할 수 있습니다.' }
     const id = shellIdOf(shellId)
     const agent = id && shells()?.agentOf(id)
     if (!agent) return { ok: false, error: REASONS['not-agent'] }
@@ -183,6 +192,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
         return { ok: false, error: error.message }
       }
     }
+    if (source === 'drop') return imageDrafts.pick(id, canUse, noChat, async () => droppedPaths)
     return source === 'clipboard'
       ? imageDrafts.paste(id, canUse, noChat, { includeImageWithText: true })
       : imageDrafts.pick(id, canUse, noChat, selectImages)
@@ -333,6 +343,7 @@ function registerAgentChatIpc({ ipcMain, fromMainWindow, isLocked, chats, shells
   })
   ipcMain.handle('agent-chat-read-clipboard', (event, shellId) => readAttachments(event, shellId, 'clipboard'))
   ipcMain.handle('agent-chat-pick-images', (event, shellId) => readAttachments(event, shellId, 'files'))
+  ipcMain.handle('agent-chat-drop-images', (event, shellId, paths) => readAttachments(event, shellId, 'drop', paths))
   ipcMain.handle('agent-chat-preview-image', async (event, request) => {
     if (!fromChatWindow(event)) return locked
     const scope = shellIdOf(request?.shellId)

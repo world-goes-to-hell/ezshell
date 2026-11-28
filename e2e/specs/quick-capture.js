@@ -300,14 +300,21 @@ const { check, finish } = createChecks()
   check('both shortcuts can be reset from their disabled state', await bindings('13 0\n7 0'))
   await closeSettings()
 
+  const effectCanvas = 'document.querySelector(".pointer-effects-canvas")'
+  const canvasDisplay = `(${effectCanvas} ? getComputedStyle(${effectCanvas}).display : 'absent')`
+  await main.js(`localStorage.setItem('pointerPrefs', JSON.stringify({ move: 'spot', click: 'ripple' }));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'pointerPrefs' }))`)
+  if (!await main.until(`${canvasDisplay} === 'block'`)) throw new Error('The pointer effect canvas did not appear')
   fs.writeFileSync(file('capture-hold'), '')
-  fs.writeFileSync(file('capture-request'), '')
+  fs.writeFileSync(file('capture-request'), '13 0')
   if (!(await waitFor(() => fs.existsSync(file('capture-opening'))))) throw new Error('Capture did not begin loading')
+  check('Ctrl+Win+Alt hides the pointer effects before asking for the desktop image', await main.js(`${canvasDisplay} === 'none'`))
   fs.writeFileSync(file('capture-cancel'), '')
   if (!(await waitFor(() => !fs.existsSync(file('capture-cancel'))))) throw new Error('Cancel signal was not read')
   fs.unlinkSync(file('capture-hold'))
   await sleep(300)
   check('Esc reported while the display is loading prevents the overlay from appearing', !(await pages()).some(isOverlay))
+  check('cancelling while reading the desktop restores the pointer effects', await main.until(`${canvasDisplay} === 'block'`))
 
   const initialSurface = await main.js("getComputedStyle(document.documentElement).getPropertyValue('--bg-secondary').trim()")
   fs.writeFileSync(file('capture-request'), '')
@@ -319,10 +326,14 @@ const { check, finish } = createChecks()
     typeof window.electronAPI === 'undefined' &&
       getComputedStyle(document.documentElement).getPropertyValue('--capture-surface').trim() === ${JSON.stringify(initialSurface)}
   `))
+  check('the pointer effects stay hidden while the capture editor is open', await main.js(`${canvasDisplay} === 'none'`)
+    && await beforeSelection.js(`!${effectCanvas}`))
   const firstCancel = await closeWithEscape(beforeSelection)
   check('Escape promptly closes a new capture before any click or selection', firstCancel.closed, `${firstCancel.ms}ms`)
   beforeSelection.close()
   check('cancelling a new capture leaves the clipboard alone', !fs.existsSync(file('capture-copied')))
+  check('closing the editor restores the chosen pointer effects', await main.until(`${canvasDisplay} === 'block'`))
+  await main.js(`localStorage.removeItem('pointerPrefs'); window.dispatchEvent(new StorageEvent('storage', { key: 'pointerPrefs' }))`)
 
   await openLocalAgent(main, 'codex', service)
   await openLocalAgent(main, 'claude', tools)

@@ -49,7 +49,7 @@
 .run-preset-eclipse-read li { overflow-wrap: anywhere; }
 .run-preset-eclipse .run-preset-warn { margin: 0; }
 
-/* Third batch: the servers of an Eclipse workspace, the context.xml, the approved jars */
+/* Imported server choices, the context.xml and the approved jars */
 .run-preset-servers { display: grid; gap: 4px; }
 .run-preset-tomcat label.run-preset-server {
   display: flex;
@@ -65,7 +65,7 @@
 }
 .run-preset-tomcat label.run-preset-server[data-on] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--bg-primary)); }
 .run-preset-tomcat .run-preset-server input[type="radio"] { width: auto; margin: 2px 0 0; padding: 0; box-shadow: none; accent-color: var(--accent); }
-.run-preset-server > span { display: grid; gap: 1px; min-width: 0; }
+.run-preset-server > span { display: grid; gap: 1px; min-width: 0; overflow-wrap: anywhere; }
 .run-preset-server strong { font-size: 12px; color: var(--text-primary); }
 .run-preset-server small { font-size: 11px; color: var(--text-muted); }
 .run-preset-context-xml { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; color: var(--text-secondary); }
@@ -78,7 +78,7 @@
 .run-preset-tomcat-advanced button.run-preset-extra-lib-remove:hover { background: var(--bg-hover); color: var(--error-text, var(--error)); }
 .run-preset-tomcat-advanced button.run-preset-extra-lib-remove:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; }
 
-/* 빠르게 채우기: the two quick fills on one line, what they read under them */
+/* 빠르게 채우기: the import buttons above their results */
 .run-preset-quick-fill { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .run-preset-quick-fill > .run-preset-hint { margin-right: 2px; }
 .run-preset-tomcat-advanced { display: grid; gap: 4px; }

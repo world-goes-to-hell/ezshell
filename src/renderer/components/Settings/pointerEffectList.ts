@@ -32,7 +32,15 @@ export const MOVE_EFFECT_CARDS: readonly EffectCardInfo<MoveEffect>[] = [
   { id: 'pixel', name: '픽셀 부스러기', description: '8비트 점이 흩어짐 (픽셀 세트와 잘 어울림)',
     icon: icon('<rect x="6" y="6" width="4" height="4" fill="currentColor"/><rect x="14" y="12" width="4" height="4" fill="currentColor"/><rect x="21" y="19" width="4" height="4" fill="currentColor"/><rect x="8" y="20" width="3" height="3" fill="currentColor"/>') },
   { id: 'paw', name: '고양이 발자국', description: '또각또각 발자국 (고양이 발바닥 세트와 짝)',
-    icon: icon('<ellipse cx="15" cy="20" rx="5" ry="4"/><circle cx="8.5" cy="14" r="2"/><circle cx="12.5" cy="9.5" r="2"/><circle cx="17.5" cy="9.5" r="2"/><circle cx="21.5" cy="14" r="2"/>') }
+    icon: icon('<ellipse cx="15" cy="20" rx="5" ry="4"/><circle cx="8.5" cy="14" r="2"/><circle cx="12.5" cy="9.5" r="2"/><circle cx="17.5" cy="9.5" r="2"/><circle cx="21.5" cy="14" r="2"/>') },
+  { id: 'snow', name: '눈송이', description: '작은 눈송이가 빙글 돌며 내려옴',
+    icon: icon('<path d="M15 4v22M5.5 9.5l19 11M5.5 20.5l19-11"/>') },
+  { id: 'notes', name: '음표', description: '지나간 자리에서 작은 음표가 올라옴',
+    icon: icon('<ellipse cx="10" cy="21" rx="4" ry="2.6" fill="currentColor"/><path d="M14 20V5c1.5 3.4 4.3 5.6 8 6.2"/>') },
+  { id: 'wind', name: '바람결', description: '움직인 방향으로 가는 선이 스침',
+    icon: icon('<path d="M8 9h13q3 0 3-3M4 15h20q3 0 3-3M7 21h13q3 0 3-3"/>') },
+  { id: 'firefly', name: '반딧불', description: '연둣빛 점이 깜빡이며 떠오름',
+    icon: icon('<circle cx="10" cy="20" r="5" opacity=".5"/><circle cx="10" cy="20" r="1.6" fill="currentColor"/><circle cx="21" cy="10" r="6" opacity=".5"/><circle cx="21" cy="10" r="2" fill="currentColor"/>') }
 ]
 
 export const CLICK_EFFECT_CARDS: readonly EffectCardInfo<ClickEffect>[] = [
@@ -52,5 +60,15 @@ export const CLICK_EFFECT_CARDS: readonly EffectCardInfo<ClickEffect>[] = [
   { id: 'word', name: '톡! 말풍선', description: '톡 / 뿅 / 콕 중 하나가 무작위로 팡',
     icon: icon('<rect x="4" y="6" width="22" height="14" rx="7"/><path d="M12 20l3 5 3-5"/>') },
   { id: 'ink', name: '잉크 번짐', description: '물감이 퍼지듯 번졌다 사라짐',
-    icon: icon('<circle cx="15" cy="15" r="6"/><circle cx="8" cy="12" r="3.5"/><circle cx="22" cy="18" r="4"/><circle cx="17" cy="6.5" r="2.5"/>') }
+    icon: icon('<circle cx="15" cy="15" r="6"/><circle cx="8" cy="12" r="3.5"/><circle cx="22" cy="18" r="4"/><circle cx="17" cy="6.5" r="2.5"/>') },
+  { id: 'square', name: '사각 파동', description: '기울어진 사각 테두리가 퍼짐',
+    icon: icon('<rect x="5" y="5" width="20" height="20" rx="3" transform="rotate(12 15 15)"/><rect x="11.5" y="11.5" width="7" height="7" rx="1.5"/>') },
+  { id: 'orbit', name: '궤도 위성', description: '누른 지점 둘레를 세 점이 공전',
+    icon: icon('<ellipse cx="15" cy="15" rx="11" ry="6" transform="rotate(-25 15 15)"/><circle cx="6" cy="18" r="2" fill="currentColor"/><circle cx="20" cy="9" r="2" fill="currentColor"/><circle cx="21" cy="17" r="1.4" fill="currentColor"/>') },
+  { id: 'confetti', name: '색종이', description: '색종이 조각이 솟았다가 돌며 떨어짐',
+    icon: icon('<path d="M6 10l4-2 2 4-4 2z" fill="#ff746d" stroke="none"/><path d="M14 6l4 1-1 6-4-1z" fill="#ffd56a" stroke="none"/><path d="M22 11l4 2-3 5-4-2z" fill="#55d9c4" stroke="none"/><path d="M9 20l5-2 2 4-5 2z" fill="#879aff" stroke="none"/>') },
+  { id: 'shutter', name: '카메라 셔터', description: '뷰파인더 모서리와 짧은 섬광',
+    icon: icon('<path d="M11 5H5v6m14-6h6v6M5 19v6h6m14-6v6h-6"/><rect x="10" y="10" width="10" height="10" rx="2" fill="currentColor" opacity=".25"/>') },
+  { id: 'bloom', name: '꽃망울', description: '누른 자리에 여섯 꽃잎이 피어남',
+    icon: icon('<path d="M15 7c-4-7-9 0-6 4-7-1-7 7 0 8-3 4 2 10 6 4 4 6 9 0 6-4 7-1 7-9 0-8 3-4-2-11-6-4Z"/><circle cx="15" cy="15" r="2.5" fill="currentColor"/>') }
 ]

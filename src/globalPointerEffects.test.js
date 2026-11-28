@@ -168,6 +168,67 @@ describe('desktop effects windows', () => {
     expect(wins.every(win => win.isDestroyed())).toBe(true)
   })
 
+  it('hides the effects during capture and still respects Windows state when it ends', async () => {
+    const { effects, wins, screen } = setup()
+    effects.configure(config)
+    for (const win of wins) win.webContents.emit('did-finish-load')
+    effects.onNotificationState(5)
+    const renderer = {
+      insertCSS: vi.fn(async () => 'capture-css'),
+      removeInsertedCSS: vi.fn(async () => {}),
+      isDestroyed: () => false
+    }
+    const pause = effects.pauseForCapture([renderer])
+    await pause.ready
+    expect(renderer.insertCSS).toHaveBeenCalledWith(expect.stringContaining('.pointer-effects-canvas'))
+    for (const win of wins) {
+      expect(win.hide).toHaveBeenCalledOnce()
+      expect(packets(win).at(-1)).toEqual({ type: 'clear' })
+    }
+    const reads = screen.getCursorScreenPoint.mock.calls.length
+    effects.onNotificationState(3)
+    effects.onNotificationState(5)
+    effects.onPress()
+    vi.advanceTimersByTime(100)
+    expect(screen.getCursorScreenPoint).toHaveBeenCalledTimes(reads)
+    expect(wins[0].showInactive).toHaveBeenCalledOnce()
+    effects.onNotificationState(3)
+    pause.resume()
+    await Promise.resolve()
+    expect(renderer.removeInsertedCSS).toHaveBeenCalledExactlyOnceWith('capture-css')
+    expect(wins[0].showInactive).toHaveBeenCalledOnce()
+    effects.onNotificationState(5)
+    expect(wins[0].showInactive).toHaveBeenCalledTimes(2)
+    effects.onPress()
+    expect(packets(wins[0]).at(-1)).toMatchObject({ type: 'press' })
+    effects.stop()
+  })
+
+  it('removes only its own CSS if an earlier capture ends while another one is paused', async () => {
+    const { effects, wins } = setup()
+    effects.configure(config)
+    for (const win of wins) win.webContents.emit('did-finish-load')
+    effects.onNotificationState(5)
+    let finishInsert
+    const renderer = {
+      insertCSS: vi.fn().mockImplementationOnce(() => new Promise(resolve => { finishInsert = resolve })).mockResolvedValueOnce('second'),
+      removeInsertedCSS: vi.fn(async () => {}),
+      isDestroyed: () => false
+    }
+    const first = effects.pauseForCapture([renderer])
+    const second = effects.pauseForCapture([renderer])
+    first.resume()
+    finishInsert('first')
+    await Promise.all([first.ready, second.ready])
+    expect(renderer.removeInsertedCSS.mock.calls).toEqual([['first']])
+    expect(wins[0].showInactive).toHaveBeenCalledOnce()
+    second.resume()
+    await Promise.resolve()
+    expect(renderer.removeInsertedCSS.mock.calls).toEqual([['first'], ['second']])
+    expect(wins[0].showInactive).toHaveBeenCalledTimes(2)
+    effects.stop()
+  })
+
   it('reads less often at rest, and still notices the first move after a rest within one rest interval', () => {
     expect(IDLE_SAMPLE_MS).toBeGreaterThan(MOVE_SAMPLE_MS)
     expect(IDLE_SAMPLE_MS).toBeLessThanOrEqual(40)

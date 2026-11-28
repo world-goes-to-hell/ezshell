@@ -29,8 +29,27 @@ async function realDirectory(directory) {
 
 const same = (a, b) => b !== null && path.relative(a, b) === ''
 
+// Owners whose scratch a handed-over run still uses (pid → number of such runs). An app restarting for an update
+// leaves its run preset servers to the next app (docs/plan/2026-11-27-run-presets-survive-update.md): their Tomcat
+// base, Maven settings and eclipse classes are named after that app's pid, which has exited.
+const protectedOwners = new Map()
+
+/** Keep the owner's scratch until the returned release is called (once per run) */
+function protectScratchOwner(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return () => {}
+  protectedOwners.set(pid, (protectedOwners.get(pid) ?? 0) + 1)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    const left = protectedOwners.get(pid) - 1
+    if (left > 0) protectedOwners.set(pid, left)
+    else protectedOwners.delete(pid)
+  }
+}
+
 function ownerExited(pid) {
-  if (pid === process.pid || pid > 2147483647) return false
+  if (pid === process.pid || pid > 2147483647 || protectedOwners.has(pid)) return false
   try { process.kill(pid, 0); return false }
   catch (error) { return error.code === 'ESRCH' }
 }
@@ -72,4 +91,4 @@ async function reapRunScratch(userData, tempRoot = os.tmpdir()) {
   await Promise.allSettled(jobs)
 }
 
-module.exports = { reapRunScratch, trackRunCleanup, waitRunCleanup }
+module.exports = { reapRunScratch, trackRunCleanup, waitRunCleanup, protectScratchOwner, ownerExited }

@@ -163,11 +163,37 @@ describe('the session host', () => {
     expect(exits()).toBe(1)
   })
 
-  it('lets the newest app in and the old one go', () => {
+  it('lets the next app in once the old one said keep, and the old one go', () => {
     const { connect, exits } = setup()
     const first = connect()
+    first.say({ type: 'keep', ms: 60000 })
     const second = connect()
     expect(first.destroyed).toBe(true)
+    expect(second.destroyed).toBe(false)
+    expect(exits()).toBe(0)
+  })
+
+  it('turns a second app away while the first still works in it (a dev run sharing the data folder)', () => {
+    const { connect, ptys, exits } = setup()
+    const first = connect()
+    first.say(spawnRequest())
+    const second = connect()
+    expect(second.sent).toContainEqual({ type: 'busy' })
+    expect(second.destroyed).toBe(true)
+    expect(first.destroyed).toBe(false)
+    expect(ptys[0].killed).toBe(false)
+    expect(exits()).toBe(0)
+    // The first app still owns its shell
+    first.say({ type: 'list' })
+    expect(first.sent.at(-1).shells).toHaveLength(1)
+  })
+
+  it('lets a new app in after the old connection is gone while kept', () => {
+    const { connect, exits } = setup()
+    const first = connect()
+    first.say({ type: 'keep', ms: 60000 })
+    first.destroy()
+    const second = connect()
     expect(second.destroyed).toBe(false)
     expect(exits()).toBe(0)
   })

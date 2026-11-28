@@ -20,6 +20,11 @@ if (!app.commandLine.hasSwitch('user-data-dir')) {
   }));
 }
 
+const isWindows = process.platform === 'win32';
+const explorerFile = isWindows ? app.commandLine.getSwitchValue('open-explorer-file') : '';
+// Explorer starts another process for each file. Forward the request before starting any services.
+if (isWindows && !app.requestSingleInstanceLock({ explorerFile })) process.exit(0);
+
 // Windows groups taskbar buttons by AppUserModelID. The installer's shortcuts (pinned, Start menu)
 // carry build.appId; the windows had no ID of their own, and a live-view window showed up as a second
 // ezShell button (Electron can fall back to its own "electron.app.<name>" ID). Keep in sync with
@@ -94,6 +99,7 @@ const { withHostKeyCheck, hostKeyMessage } = require('./src/hostKeys/hostKeyChec
 const { createHostKeyPrompter } = require('./src/hostKeys/hostKeyPrompt.js');
 
 let mainWindow;
+let mainWindowRevealed = false;
 
 // Window / taskbar icon, copied next to the bundle at build time (electron.vite.config.ts). Set on every window so
 // the taskbar shows it even where the exe still carries Electron's icon (`npm run dev` runs electron.exe).
@@ -293,6 +299,7 @@ function createStartupSplash(placement, rendererUrl) {
 }
 
 function createWindow() {
+  mainWindowRevealed = false;
   // Opens where it was closed (also after an update restarts the app), if that place is still on a screen
   const windowStatePath = path.join(app.getPath('userData'), 'window-state.json');
   const lastPlace = windowState.usableState(
@@ -352,6 +359,8 @@ function createWindow() {
     clearTimeout(startupTimeout);
     if (lastPlace?.isMaximized && !mainWindowFill) win.maximize();
     win.show();
+    mainWindowRevealed = true;
+    void openExplorerFiles();
     if (rendererUrl) win.webContents.openDevTools();
   };
   const startupTimeout = setTimeout(() => {
@@ -423,30 +432,27 @@ function createWindow() {
 }
 
 // Updates and the "업데이트 내용" state: src/ipc/updates.js
-const { setupAutoUpdater, installsUpdateOnQuit } = require('./src/ipc/updates.js').registerUpdateIpc({
-  ipcMain, app, shell, sessionsFilePath,
+const { setupAutoUpdater, finishQuit, isInstallingOnQuit, isRestartingForUpdate } = require('./src/ipc/updates.js').registerUpdateIpc({
+  ipcMain, app, dialog, shell, sessionsFilePath,
   // Declared further down the file: looked up when a request arrives, not now
   fromMainWindow: (event) => fromMainWindow(event),
   get mainWindow() { return mainWindow; },
   testUpdateRestart: !app.isPackaged && process.env.EZSHELL_TEST_UPDATE_RESTART === '1',
-  // Restarting to install: the session host keeps the shells for the app the installer starts
-  async beforeUpdateRestart() {
-    restartingForUpdate = true;
-    await sessionHost.keep(SESSION_KEEP_MS);
-  }
+  keepSessionsForUpdate: () => sessionHost.keep(SESSION_KEEP_MS),
+  finishSessionQuit
 });
 
 // App windows show only the app's own page. The browser view has a separate session and policy.
-app.on('web-contents-created', (event, contents) => {
-  if (browserReview.ownsPage(contents)) return;
-  const devUrls = [
+const rendererNavigation = {
+  rendererFile: path.join(__dirname, '../renderer/index.html'),
+  devUrls: [
     process.env.ELECTRON_RENDERER_URL,
     process.argv.includes('--dev') ? DEV_RENDERER_URL : null
-  ].filter(Boolean);
-  navigationGuard.guardWebContents(contents, {
-    rendererFile: path.join(__dirname, '../renderer/index.html'),
-    devUrls
-  });
+  ].filter(Boolean)
+};
+app.on('web-contents-created', (event, contents) => {
+  if (browserReview.ownsPage(contents)) return;
+  navigationGuard.guardWebContents(contents, rendererNavigation);
 });
 
 app.whenReady().then(() => {
@@ -458,7 +464,12 @@ app.whenReady().then(() => {
   sessionHostStarting = startSessionHost().catch(error => console.error('[sessionHost] start failed:', error.message));
   startMcp();
   if (fs.existsSync(agentBridgeFile)) {
-    void agentMessages.enableExternalBridge().catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
+    // After the runtime copy is ready (startSessionHost prepares it first): written before it, the shared
+    // bridge named the install folder's exe and a script inside its app.asar, so every Claude/Codex using
+    // the global ezshell-cli-mcp ran an ezShell.exe there that held app.asar while an update installed
+    // (docs/fix/2026-11-27-update-uninstall-failed-again.md).
+    void sessionHostStarting.then(() => agentMessages.enableExternalBridge())
+      .catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
   }
 
   // Auto-updater setup (production only)
@@ -543,6 +554,44 @@ const remoteFileIpc = registerRemoteFileIpc({
   }
 });
 
+const pendingExplorerFiles = new Set(explorerFile ? [explorerFile] : []);
+let openingExplorerFiles = false;
+
+async function openExplorerFiles() {
+  if (!mainWindowRevealed || isAppLocked || isInstallingOnQuit() || openingExplorerFiles || !pendingExplorerFiles.size) return;
+  openingExplorerFiles = true;
+  try {
+    const { resolveExplorerFile } = require('./src/localFiles/explorerOpen.js');
+    for (const requested of pendingExplorerFiles) {
+      if (isAppLocked || isInstallingOnQuit()) break;
+      const file = await resolveExplorerFile(requested);
+      if (isAppLocked || isInstallingOnQuit()) break;
+      pendingExplorerFiles.delete(requested);
+      const result = file && remoteFileIpc.openLocalFile(file.path, '이 PC', { previewText: file.previewText });
+      if (!result?.ok) {
+        dialog.showErrorBox('ezShell로 열기', result?.error ?? '이 PC의 파일을 찾거나 열 수 없습니다.');
+      }
+    }
+  } finally {
+    openingExplorerFiles = false;
+  }
+}
+
+if (isWindows) {
+  app.on('second-instance', (_event, _args, _cwd, data) => {
+    if (isInstallingOnQuit()) return;
+    const requested = data?.explorerFile;
+    if (typeof requested === 'string' && requested && pendingExplorerFiles.size < 20) {
+      pendingExplorerFiles.add(requested);
+    }
+    if (!requested || isAppLocked) {
+      if (mainWindow?.isDestroyed()) createWindow();
+      else if (mainWindowRevealed) revealMainWindow();
+    }
+    void openExplorerFiles();
+  });
+}
+
 // ==================== DB 클라이언트 창 ====================
 // One window per database connection, reached through a channel of the tab's SSH connection
 // (no port is opened on this PC). Read-only; see src/dbClient.
@@ -603,6 +652,10 @@ const quickCapture = require('./src/quickCapture.js').createQuickCapture({
   },
   isAvailable: () => process.platform === 'win32' && !isAppLocked && mainWindow && !mainWindow.isDestroyed()
     && !(mainWindow.isFocused() && shortcutRecorder === mainWindow.webContents),
+  pausePointerEffects: () => globalPointerEffects.pauseForCapture(BrowserWindow.getAllWindows()
+    .filter(win => win.isVisible() && !win.isMinimized())
+    .map(win => win.webContents)
+    .filter(contents => navigationGuard.isAllowedNavigation(contents.getURL(), rendererNavigation))),
   listAgents: () => agentMessages.snapshot().agents
     .filter(agent => agent.active && agent.kind !== 'antigravity' && localShells?.chatAgentId(agent.shellId) === agent.id)
     .map(({ id, shellId, kind, cwd, role, status }) => ({ id, shellId, kind, cwd, role, status })),
@@ -702,7 +755,6 @@ let localShells = null;
 // folder, so they go on while the app restarts to install an update (src/sessionHost/,
 // docs/plan/2026-11-26-sessions-survive-update.md). Windows only; elsewhere shells stay in the app.
 const SESSION_KEEP_MS = 3 * 60 * 1000;
-let restartingForUpdate = false;
 const sessionRuntime = require('./src/sessionHost/runtimeCopy.js').createRuntimeCopy({
   packaged: app.isPackaged,
   execPath: process.execPath,
@@ -711,8 +763,12 @@ const sessionRuntime = require('./src/sessionHost/runtimeCopy.js').createRuntime
   ptyDir: path.dirname(require.resolve('node-pty/package.json')).replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
   localAppData: process.env.LOCALAPPDATA
 });
-const sessionHost = require('./src/sessionHost/client.js').createSessionHostClient({
+const sessionHostClient = require('./src/sessionHost/client.js');
+const sessionHost = sessionHostClient.createSessionHostClient({
   stateFolder: userDataPath,
+  // `npm run dev` shares the installed app's user data folder: with the same state file it took over the
+  // installed app's host and every shell ended with the dev run (2026-11-27 user report)
+  stateName: app.isPackaged ? sessionHostClient.STATE_FILE : sessionHostClient.DEV_STATE_FILE,
   runtime: () => sessionRuntime.current()
 });
 /** At start: the host (taking back one an earlier app kept), then the shells it kept */
@@ -720,6 +776,8 @@ const sessionHost = require('./src/sessionHost/client.js').createSessionHostClie
 // unlock that can come before the session host was found, and the window then offered the kept tabs again
 // as new ones (2026-11-26 user report: every session twice, chats back as terminals). It waits for the start.
 let sessionHostStarting = null;
+// The shells the session host brought back at this start: the handed-over agents of any other shell are retired
+let keptShellIds = [];
 const SESSION_HOST_WAIT_MS = 15000;
 function sessionHostStarted() {
   if (!sessionHostStarting) return Promise.resolve();
@@ -736,7 +794,28 @@ async function startSessionHost() {
   if (testDelay > 0) await new Promise(resolve => setTimeout(resolve, Math.min(testDelay, 30000)));
   if (!(await sessionHost.start())) return;
   const kept = sessionHost.takeAdoptable();
-  if (kept.length > 0) getLocalShells().adopt(kept);
+  if (kept.length > 0) keptShellIds = getLocalShells().adopt(kept);
+  // Run preset servers the app before the update handed over: their scratch is kept at once (the start's reap
+  // waits for this function), then each run is checked against its saved preset and taken back or ended.
+  const keptRuns = kept.length > 0 ? getLocalShells().takeKeptDevelopment() : [];
+  if (keptRuns.length > 0) {
+    runPresets.holdKeptScratch(keptRuns);
+    void Promise.allSettled(keptRuns.map(adoptKeptRun));
+  }
+}
+async function adoptKeptRun(record) {
+  let task;
+  try {
+    task = await runPresets.adoptRun(record);
+    getLocalShells().adoptDevelopment(record.id, task);
+  } catch (error) {
+    console.warn('[runPresets] Could not take back a run after the update:', error.message);
+    getLocalShells().dropKeptDevelopment(record.id);
+    if (task) {
+      task.onEvent({ type: 'closed', shellId: record.id, wasRunning: false });
+      await task.cleanup?.();
+    }
+  }
 }
 const agentBridgeFile = path.join(userDataPath, 'agent-message-connection');
 const claudeRoot = require('./src/agentHistory/history.js').agentRoots(process.env, require('os').homedir()).claude;
@@ -782,6 +861,9 @@ const agentMessages = require('./src/ipc/agentMessages.js').createAgentMessages(
 function restoreAgentHandoff() {
   if (!agentMessages.awaitingHandoff()) return;
   agentMessages.importHandoff(agentHandoff.takeAgentHandoff({ ...agentHandoffFiles, masterPassword: currentMasterPassword }));
+  // Agents whose shells did not come back (a new session host, a shell that ended) end once the host's start
+  // is over: the whole start, not the window's 15-second wait, so a shell adopted late keeps its agent
+  void (sessionHostStarting ?? Promise.resolve()).then(() => agentMessages.retireLostShells(keptShellIds));
 }
 const localTerminalClipboard = require('./src/ipc/localTerminalClipboard.js').createLocalTerminalClipboard(clipboard, nativeImage);
 async function selectAgentImages(title) {
@@ -915,6 +997,28 @@ for (const [channel, operation] of [['claude-profiles-list', claudeProfiles.list
     catch (error) { return { success: false, error: error.code ? 'Claude 계정 설정을 저장할 수 없습니다.' : error.message }; }
   });
 }
+// The same conversation under another account, in the same pane (docs/plan/2026-11-27-claude-account-switch-in-place.md)
+const claudeAccountSwitch = require('./src/agentChat/claudeAccountSwitch.js').createClaudeAccountSwitch({
+  shells: () => getLocalShells(),
+  profileRoot: (id, create) => claudeProfiles.rootFor(id, create),
+  defaultRoot: claudeRoot
+});
+ipcMain.handle('claude-profile-switch-in-place', (event, request) => {
+  if (!fromClaudeProfilesWindow(event)) return { success: false, error: '잠금 해제 후 본창에서 이용할 수 있습니다.' };
+  try {
+    const shellId = request?.shellId;
+    const local = getLocalShells();
+    const previousAgentId = typeof shellId === 'string' ? local.chatAgentId(shellId) : null;
+    const { role } = agentMessages.snapshot().agents.find(agent => agent.id === previousAgentId) ?? {};
+    const opened = claudeAccountSwitch.switchInPlace({ shellId, profileId: request?.profileId });
+    // The new Claude is a new agent: it keeps the name the pane had
+    const agentId = local.chatAgentId(opened.id);
+    if (role && agentId) { try { agentMessages.setUserRole(agentId, role); } catch { /* the role stays with the old pane */ } }
+    return { success: true, ...opened };
+  } catch (error) {
+    return { success: false, error: error.code ? 'Claude 계정을 바꿀 수 없습니다.' : error.message };
+  }
+});
 
 ipcMain.handle('local-shell-open', async (event, size) => {
   if (!fromMainWindow(event)) return { success: false, error: '본창에서만 열 수 있습니다.' };
@@ -989,7 +1093,7 @@ ipcMain.on('local-shell-composing', (event, { id, value }) => {
   if (fromMainWindow(event) && typeof value === 'boolean') localShells?.setComposing(id, value);
 });
 ipcMain.on('local-shell-resize', (event, { id, cols, rows }) => { if (fromMainWindow(event)) localShells?.resize(id, cols, rows); });
-ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id); });
+ipcMain.on('local-shell-close', (event, id) => { if (fromMainWindow(event)) localShells?.close(id, { keepRunPreset: true }); });
 ipcMain.handle('local-shell-clipboard', async (event, id) => {
   const canPaste = () => fromMainWindow(event) && !isAppLocked && localShells?.isRunning(id);
   const empty = { success: true, text: '' };
@@ -1006,16 +1110,14 @@ ipcMain.handle('local-shell-clipboard', async (event, id) => {
   }
 });
 app.on('will-quit', () => localTerminalClipboard.dispose());
-app.on('will-quit', () => {
-  // The installer runs right after this and must find nothing holding the install folder: end the shells'
-  // whole trees (their agents and the agents' message MCP, this app's exe) and keep CLIs in other terminals
-  // from starting the exe again meanwhile (docs/fix/2026-11-24-update-uninstall-failed-2.md)
-  const updating = installsUpdateOnQuit();
+app.on('will-quit', finishQuit);
+
+function finishSessionQuit({ updating, keepShells }) {
+  // End the trees that still use this install, and stop other CLIs from starting the shared bridge again.
   if (updating) agentMessages.pauseExternalBridge();
-  const handingOver = updating && restartingForUpdate && sessionHost.ready();
+  const handingOver = keepShells && sessionHost.ready();
   if (handingOver) {
-    // The shells in the session host wait there for the app the installer starts (keep was sent before
-    // the quit); the others end with their trees
+    // The host has acknowledged keep. Its shells wait for the new app while the other trees end.
     localShells?.handOver();
     sessionHost.release();
   } else {
@@ -1027,7 +1129,7 @@ app.on('will-quit', () => {
     ...agentHandoffFiles, record: agentMessages.exportHandoff(), masterPassword: currentMasterPassword
   });
   agentMessages.stop({ handOver: handedOver });
-});
+}
 ipcMain.handle('agent-messages-state', event =>
   fromMainWindow(event) && !isAppLocked ? agentMessages.snapshot() : null
 );
@@ -1107,7 +1209,8 @@ app.on('will-quit', () => runtimes.cancel());
 const { createRunPresets, registerRunPresetIpc, withSubject } = require('./src/ipc/runPresets.js');
 const { reapRunScratch, waitRunCleanup } = require('./src/ipc/runScratch.js');
 const { closeTomcatBases } = require('./src/ipc/tomcatRun.js');
-void app.whenReady().then(() => reapRunScratch(userDataPath)).catch(() => {});
+// After the session host's start: a server handed over by the app before an update keeps that app's scratch
+void app.whenReady().then(() => sessionHostStarting).then(() => reapRunScratch(userDataPath)).catch(() => {});
 const runPresets = createRunPresets({
   file: path.join(userDataPath, 'run-presets.json'),
   getShells: getLocalShells,
@@ -1148,6 +1251,11 @@ const runPresetIpc = registerRunPresetIpc({
   chooseContextFile: async defaultPath => {
     const result = await dialog.showOpenDialog(mainWindow, { title: 'Tomcat 컨텍스트 XML 선택', defaultPath,
       properties: ['openFile'], filters: [{ name: 'XML', extensions: ['xml'] }] });
+    return result.canceled ? null : result.filePaths[0];
+  },
+  chooseIdeFile: async defaultPath => {
+    const result = await dialog.showOpenDialog(mainWindow, { title: 'Tomcat 실행 설정 파일 선택', defaultPath,
+      properties: ['openFile'], filters: [{ name: 'IDE 실행 설정', extensions: ['xml', 'json', 'jsonc'] }, { name: '모든 파일', extensions: ['*'] }] });
     return result.canceled ? null : result.filePaths[0];
   }
 });
@@ -1250,7 +1358,7 @@ const agentChatIpc = require('./src/agentChat/ipc.js').registerAgentChatIpc({
       const failure = await shell.openPath(target);
       if (failure) throw new Error(failure);
     },
-    openLocalFile: (target, line) => remoteFileIpc.openLocalFile(target, '에이전트 대화', line)
+    openLocalFile: (target, line) => remoteFileIpc.openLocalFile(target, '에이전트 대화', { line })
   }
 });
 
@@ -1436,8 +1544,12 @@ app.on('before-quit', (event) => {
   const shutdown = mcpController?.shutdown().catch(() => {});
   runPresets.cancelBatches();
   runPresets.suspendReloads();
-  const draining = localShells ? localShells.drainDevelopmentTasks() : waitRunCleanup();
-  const development = draining ? draining.then(closeTomcatBases) : closeTomcatBases();
+  // Restarting for an update: the run preset servers in the session host go on for the next app, with their
+  // Tomcat bases (docs/plan/2026-11-27-run-presets-survive-update.md). Bases left by other runs are reaped
+  // at a later start, once no handed-over server of this app uses them.
+  const keepHosted = isRestartingForUpdate() && sessionHost.ready();
+  const draining = localShells ? localShells.drainDevelopmentTasks({ keepHosted }) : waitRunCleanup();
+  const development = keepHosted ? draining : draining ? draining.then(closeTomcatBases) : closeTomcatBases();
   if (!mustWait && !development) return;
   event.preventDefault();
   let timer;
@@ -1490,6 +1602,7 @@ ipcMain.handle('setup-master-password', async (event, { password }) => {
   runPresets.resumeReloads();
   localShells?.wakeInboxes();
   void remoteAccess.start();
+  void openExplorerFiles();
 
   return { success: true };
 });
@@ -1514,6 +1627,7 @@ ipcMain.handle('unlock-app', async (event, { password }) => {
     localShells?.wakeInboxes();
     resealSessionsFile();
     void remoteAccess.start();
+    void openExplorerFiles();
     return { success: true };
   }
 

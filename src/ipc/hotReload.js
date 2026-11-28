@@ -195,12 +195,24 @@ function startHotReload(config, options) {
   return { close, suspend, resume }
 }
 
+/** Edits per source root, earlier ones first, each file once */
+function mergeChanges(...groups) {
+  const merged = new Map()
+  for (const group of groups) {
+    for (const [root, files] of group) merged.set(root, new Set([...(merged.get(root) ?? []), ...files]))
+  }
+  return [...merged]
+}
+
 function watchJavaChanges(config, { pid, env, running, onState, watchSource = watch, findDevtools = devtoolsLayout,
   debug, readClassInfo, makeCompiler = createJavac, timeout = START_TIMEOUT, quiet = QUIET_MS, now = Date.now }) {
   const lifetime = new AbortController()
   const { signal } = lifetime
   const watchers = []
   const pending = new Map()
+  // Files whose change has not reached the JVM (refused, not compiled, not confirmed). They go again with
+  // every later edit: a caller applied without its changed callee would throw NoSuchMethodError.
+  const carried = new Map()
   let timer
   let lastChange = 0
   let processing = false
@@ -218,8 +230,9 @@ function watchJavaChanges(config, { pid, env, running, onState, watchSource = wa
     timer = undefined
     if (signal.aborted || processing || !pending.size || !running()) return
     processing = true
-    const batch = [...pending]
+    const batch = mergeChanges(carried, pending)
     pending.clear()
+    carried.clear()
     let stage = 'compile'
     try {
       const sources = []
@@ -243,6 +256,7 @@ function watchJavaChanges(config, { pid, env, running, onState, watchSource = wa
       report({ status: 'applied', classes: classes.length })
     } catch (error) {
       if (signal.aborted) return
+      for (const [root, files] of batch) carried.set(root, files)
       if (stage === 'compile') {
         const { reason, diagnostics } = compilerFailure(error)
         report({ status: 'compileError', reason }, diagnostics ?? [])

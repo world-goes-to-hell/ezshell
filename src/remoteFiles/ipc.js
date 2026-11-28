@@ -316,15 +316,15 @@ function registerRemoteFileIpc({ ipcMain, docs, createWindow, openFolder, isLock
   const unsavedEditCount = () => dirty.size
 
   /**
-   * A file of this PC the user picked from a link in an agent's answer (src/agentChat/ipc.js checks it
-   * was in the conversation and resolves it). Text opens in the editor, images and PDFs in the preview.
+   * A local file selected in Explorer or in an agent's answer. The caller validates and resolves it.
+   * Text opens in the editor unless `previewText` is set. Images and PDFs open in the preview.
    */
   /** `line`: open at that line (a new window reads it; an open one is told, as for a definition) */
-  function openLocalFile(realPath, label, line = null) {
+  function openLocalFile(realPath, label, { line, previewText = false } = {}) {
     try {
       refuseWhileLocked()
       const revealLine = Number.isInteger(line) && line > 0 ? line : null
-      const registered = docs.registerLocal({ root: require('path').dirname(realPath), path: realPath, label, mode: 'preview', revealLine })
+      const registered = docs.registerLocal({ root: require('path').dirname(realPath), path: realPath, label, mode: 'preview', revealLine, previewText })
       openWindowFor(registered, revealLine ? { line: revealLine } : undefined)
       return { ok: true }
     } catch (err) {

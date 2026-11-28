@@ -6,6 +6,24 @@ const path = require('path')
 require('../../out/main/src/testWindows.js').createTestWindows(require('electron'))
 
 const profile = app.commandLine.getSwitchValue('user-data-dir')
+// A restored snapshot can include an older agent on the same shell ID.
+const staleShellAgent = path.join(profile, 'stale-shell-agent')
+const agentMessages = require('../../out/main/src/ipc/agentMessages.js')
+const createAgentMessages = agentMessages.createAgentMessages
+agentMessages.createAgentMessages = options => {
+  const withStaleAgent = snapshot => {
+    if (!fs.existsSync(staleShellAgent)) return snapshot
+    const live = snapshot.agents.find(agent => agent.id === 'claude-1' && agent.active)
+    if (!live) return snapshot
+    const stale = { ...live, id: 'claude-0', status: 'idle', mcpConnected: false }
+    return { ...snapshot, agents: [stale, ...snapshot.agents] }
+  }
+  const bridge = createAgentMessages({
+    ...options,
+    notify: (channel, payload) => options.notify(channel, channel === 'agent-messages-state' ? withStaleAgent(payload) : payload)
+  })
+  return { ...bridge, snapshot: () => withStaleAgent(bridge.snapshot()) }
+}
 process.env.CLAUDE_CONFIG_DIR = path.join(profile, 'claude-home')
 process.env.CODEX_HOME = path.join(profile, 'codex-home')
 fs.mkdirSync(path.join(process.env.CLAUDE_CONFIG_DIR, 'projects', 'test'), { recursive: true })

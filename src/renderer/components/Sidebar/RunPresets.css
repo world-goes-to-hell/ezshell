@@ -68,11 +68,10 @@
   background: var(--bg-primary);
   font-size: 12px;
 }
-/* The row's own line (kind, name, state, buttons); the hot reload line goes under it */
 .run-preset-main {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   min-width: 0;
   height: 24px;
   padding: 0 2px 0 6px;
@@ -116,14 +115,23 @@ button.run-preset-failure-line:hover span { text-decoration: underline; }
 .run-preset-kind[data-kind="java"] { color: #e76f00; }
 .run-preset-kind[data-kind="tomcat"] { color: #c8960c; }
 
-/* The name gives way first (the row's title has it whole): the state and every button stay in the row (2026-11-26) */
-.run-preset-name { flex: 0 1 auto; min-width: 20px; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text-primary); }
+.run-preset-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: var(--text-primary); }
+.run-preset-details {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  min-width: 0;
+  padding: 0 6px 4px 25px;
+}
+.run-preset-details:empty { display: none; }
+.run-preset-details > .nested-repository-chips { max-width: 100%; }
 .run-preset-folder,
-.run-preset-note { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.run-preset-note { flex: 1 1 6ch; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .run-preset-folder { color: var(--text-muted); font-family: var(--font-mono, monospace); }
 .run-preset-note { color: var(--accent); }
 
-.run-preset-state { display: flex; flex: none; align-items: center; gap: 3px; }
+.run-preset-state { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; max-width: 100%; }
 .run-preset-pill {
   padding: 0 6px;
   border: none;
@@ -139,8 +147,6 @@ button.run-preset-failure-line:hover span { text-decoration: underline; }
 .run-preset-pill[data-kind="wait"] { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 button.run-preset-pill { cursor: pointer; }
 .run-preset-pill.is-count { display: inline-flex; align-items: center; gap: 2px; padding: 0 5px; font-family: var(--font-mono, monospace); }
-/* Takes the free width between the state and the name, with no gap of its own */
-.run-preset-spacer { flex: 1; min-width: 0; margin-left: -3px; }
 button.run-preset-pill:hover { text-decoration: underline; }
 button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -158,7 +164,7 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 .run-preset-btn {
   display: grid;
   place-items: center;
-  width: 22px;
+  width: 20px;
   height: 22px;
   flex: none;
   padding: 0;
@@ -406,17 +412,7 @@ button.run-preset-pill:focus-visible { outline: 2px solid var(--accent); outline
 .run-preset-form .run-preset-folder-browse:hover { background: var(--bg-hover); }
 .run-preset-form .run-preset-command { padding: 8px 10px; font-size: 12px; }
 
-/* Narrow sidebar: a row keeps all its buttons */
 .run-presets { margin-left: 14px; margin-right: 2px; }
-.run-preset-main { gap: 3px; }
-.run-preset-btn { width: 20px; }
-.run-preset-name { max-width: 34%; }
-/* With a name or folder to show beside no state, the name may take what is free */
-.run-preset[data-status="idle"] .run-preset-name, .run-preset[data-status="stopped"] .run-preset-name { max-width: 50%; }
-.run-preset-main:has(> .nested-repository-chips) > .run-preset-name {
-  flex-shrink: 0;
-  max-width: max(6.5em, 42%);
-}
 
 .run-send-dialog .modal-actions .modal-btn { min-width: 0; padding: 6px 10px; font-size: 12px; }
 .run-send-agent .agent-identity-badge { flex: 1; min-width: 0; max-width: none; }

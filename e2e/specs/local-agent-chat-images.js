@@ -53,6 +53,28 @@ async function run() {
     }) + '\n')
     const working = `${cover}.querySelector('.agent-chat-status')?.dataset.status === 'working'`
 
+    // Files dropped from the file manager (2026-11-27 user request): a terminal gets their paths as a paste
+    const dropFiles = async (target, files) => {
+      const [x, y] = await center(target)
+      const data = { items: [], files, dragOperationsMask: 1 }
+      for (const type of ['dragEnter', 'dragOver']) await send('Input.dispatchDragEvent', { type, x, y, data })
+      const shown = await until(`!!${activePane}?.querySelector('.file-drop-overlay')`, 2000)
+      await send('Input.dispatchDragEvent', { type: 'drop', x, y, data })
+      return shown
+    }
+    const droppedShot = file('drop-shot.png')
+    const droppedNote = file('drop me.txt')
+    fs.copyFileSync(file('attachment-2.png'), droppedShot)
+    fs.writeFileSync(droppedNote, 'note')
+    await openLocalAgent(driver, undefined, profile)
+    if (!await until(`!!${activePane}?.querySelector('.xterm-helper-textarea') && !${activePane}.dataset.chatMode`)) throw new Error('The local terminal did not open')
+    const dropShown = await dropFiles(`${activePane}.querySelector('.local-terminal-host')`, [droppedShot, droppedNote])
+    const typed = `${droppedShot} '${droppedNote}' `
+    for (let i = 0; i < 50 && !read('shell-input').includes(typed); i++) await sleep(100)
+    check('files dropped on a terminal show where they go and type their paths (quoted where needed)',
+      dropShown && read('shell-input').includes(typed), JSON.stringify(read('shell-input').slice(-300)))
+    check('the drop leaves no sign behind', await until(`!${activePane}.querySelector('.file-drop-overlay')`, 2000))
+
     for (const kind of ['claude', 'codex']) {
       await openLocalAgent(driver, kind, profile)
       const agentId = `window.electronAPI.agentMessagesSnapshot().then(snapshot =>
@@ -65,6 +87,16 @@ async function run() {
       await js(`${activePane}.querySelector('.xterm-helper-textarea').focus()`)
       await press({ key: 'F11', code: 'F11', windowsVirtualKeyCode: 122, modifiers: 10 })
       if (!await until(`!!${input}`)) throw new Error(`The ${kind} composer did not open`)
+      // In the chat a picture is attached as by 이미지 첨부 and another file goes in as its path
+      await setDraft('')
+      const chatShown = await dropFiles(cover, [droppedShot, droppedNote])
+      check(`${kind} chat attaches a dropped picture and puts another file's path in the draft`, chatShown && await until(`
+        ${widths('.agent-chat-attachment img')} === '280' && ${input}.value.includes(${JSON.stringify(`'${droppedNote}'`)})
+        && ${input}.value.includes('[첨부이미지 1]')
+      `, 5000), await js(`JSON.stringify({ value: ${input}?.value, widths: ${widths('.agent-chat-attachment img')} })`))
+      await click(...await center(`${cover}.querySelector('.agent-chat-attachment button')`))
+      await until(`!${cover}.querySelector('.agent-chat-attachment')`, 3000)
+      await setDraft('')
       const sessionId = '5a6f0d9e-1b2c-4d3e-8f90-0a1b2c3d4e5f'
       const transcript = file(path.join('claude-home', 'projects', 'test', sessionId + '.jsonl'))
       const answer = (id, text) => append(transcript, {

@@ -1,6 +1,6 @@
 {
   "name": "ezshell",
-  "version": "2.38.0",
+  "version": "2.41.1",
   "description": "Simple SSH Client with Beautiful UI",
   "main": "./out/main/index.js",
   "scripts": {
@@ -165,6 +165,7 @@
       "artifactName": "ezShell-${version}-${arch}.${ext}"
     },
     "nsis": {
+      "include": "scripts/windows-installer.nsh",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "installerIcon": "assets/icon.ico",

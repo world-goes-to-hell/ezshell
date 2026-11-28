@@ -18,4 +18,8 @@
 
 ## 개발 서버 기동 탭
 
-[로컬 프로젝트 실행 구성](local-project-run.md)
+저장된 실행 구성의 PTY는 백그라운드에서 실행한다. **로그 보기**로 PTY의 출력을 탭에 붙인다. 그 탭을 닫을 때 main은 PTY와 최근 출력을 보관한다. [로컬 프로젝트 실행 구성](local-project-run.md)
+
+## 파일 끌어 놓기
+
+탐색기에서 로컬 터미널로 파일을 끌어 놓으면 그 경로를 붙여 넣는다 (Windows Terminal 과 같은 동작, `hooks/useFileDrop.ts`). 여러 파일은 한 줄에 공백으로 잇고 끝에 공백을 둔다. 따옴표는 붙여 넣은 화면 캡처 경로(`src/ipc/localTerminalClipboard.js` 의 `saveImage`)와 같은 규칙을 쓴다 (`lib/droppedFiles.ts` 의 `terminalDropText`). xterm 의 `paste` 로 넣으므로, 괄호 붙여넣기를 켠 Claude Code·Codex 는 이미지 경로를 첨부로 받는다. 제어 문자가 든 경로는 넣지 않는다 (줄바꿈이 Enter 가 된다). 채팅 보기에서는 채팅 화면이 끌어 놓기를 받는다 (`docs/architecture/agent-chat.md`). SSH 터미널의 끌어 놓기는 지금처럼 SFTP 업로드다. 화면 시험: `local-agent-chat-images`.

@@ -4,7 +4,8 @@ import * as Dialog from '@radix-ui/react-dialog'
 import * as Tabs from '@radix-ui/react-tabs'
 import { motion, AnimatePresence } from 'framer-motion'
 import { modalOverlayVariants, modalContentVariants } from '../../lib/animation/variants'
-import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine } from 'react-icons/ri'
+import { RiCloseFill, RiSettings3Fill, RiPaletteFill, RiKeyboardLine, RiDatabaseLine, RiTerminalBoxLine, RiPlugLine, RiSmartphoneLine, RiMailLine, RiCodeSSlashLine, RiUserSettingsLine } from 'react-icons/ri'
+import type { IconType } from 'react-icons'
 import { ThemeSettings } from './ThemeSettings'
 import { ShortcutsPanel } from './ShortcutsPanel'
 import { SessionBackup } from './SessionBackup'
@@ -19,6 +20,19 @@ import { NestedRepositorySettings } from '../Sidebar/NestedRepositories'
 import { ClaudeProfilesSettings } from './ClaudeProfilesSettings'
 import { RemoteAccessSettings } from '../RemoteAccess/RemoteAccessSettings'
 import '../../styles/settings.css'
+
+// The categories, in the left column and in the narrow dialog's list (2026-11-27 user request: eight in a
+// row wrapped and long names were hard to read)
+const SETTINGS_CATEGORIES: ReadonlyArray<{ value: string; label: string; Icon: IconType }> = [
+  { value: 'theme', label: '테마', Icon: RiPaletteFill },
+  { value: 'terminal', label: '터미널', Icon: RiTerminalBoxLine },
+  { value: 'shortcuts', label: '키보드 단축키', Icon: RiKeyboardLine },
+  { value: 'backup', label: '백업', Icon: RiDatabaseLine },
+  { value: 'mcp', label: 'MCP', Icon: RiPlugLine },
+  { value: 'remote', label: '원격 접속', Icon: RiSmartphoneLine },
+  { value: 'development', label: '개발 도구', Icon: RiCodeSSlashLine },
+  { value: 'claude-accounts', label: 'Claude 계정', Icon: RiUserSettingsLine }
+]
 
 interface SettingsModalProps {
   open: boolean
@@ -70,34 +84,22 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                   </Dialog.Close>
                 </div>
 
-                <Tabs.Root value={activeTab} onValueChange={setActiveTab} className="settings-tabs">
+                <Tabs.Root value={activeTab} onValueChange={setActiveTab} orientation="vertical" className="settings-tabs">
+                  {/* Wide: the categories in a column on the left, only the content scrolls. Narrow (the
+                      dialog under 720px): the column hides and this list picks the category instead */}
+                  <label className="settings-category-picker">
+                    <span>설정 항목</span>
+                    <select value={activeTab} onChange={event => setActiveTab(event.target.value)}>
+                      {SETTINGS_CATEGORIES.map(category => <option key={category.value} value={category.value}>{category.label}</option>)}
+                    </select>
+                  </label>
                   <Tabs.List className="settings-tabs-list" aria-label="설정">
-                    <Tabs.Trigger value="theme" className="settings-tab-trigger">
-                      <RiPaletteFill size={18} />
-                      테마
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="terminal" className="settings-tab-trigger">
-                      <RiTerminalBoxLine size={18} />
-                      터미널
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="shortcuts" className="settings-tab-trigger">
-                      <RiKeyboardLine size={18} />
-                      키보드 단축키
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="backup" className="settings-tab-trigger">
-                      <RiDatabaseLine size={18} />
-                      백업
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="mcp" className="settings-tab-trigger">
-                      <RiPlugLine size={18} />
-                      MCP
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="remote" className="settings-tab-trigger">
-                      <RiSmartphoneLine size={18} />
-                      원격 접속
-                    </Tabs.Trigger>
-                    <Tabs.Trigger value="development" className="settings-tab-trigger">개발 도구</Tabs.Trigger>
-                    <Tabs.Trigger value="claude-accounts" className="settings-tab-trigger">Claude 계정</Tabs.Trigger>
+                    {SETTINGS_CATEGORIES.map(({ value, label, Icon }) => (
+                      <Tabs.Trigger key={value} value={value} className="settings-tab-trigger">
+                        <Icon size={18} aria-hidden="true" />
+                        {label}
+                      </Tabs.Trigger>
+                    ))}
                   </Tabs.List>
 
                   <Tabs.Content value="theme" className="settings-tab-content settings-theme-content">

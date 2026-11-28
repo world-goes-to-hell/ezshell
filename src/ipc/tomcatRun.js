@@ -7,6 +7,7 @@ const { eclipseTestSource } = require('./eclipseProject.js')
 const { javaCharset, javaLogOptions, windowsConsoleEncoding } = require('./developmentEncoding.js')
 const { mavenVersionFromHome } = require('../runtimes/apacheToolHome.js')
 const { allowedJar, jarHasClass, jarClassName, copyCheckedJar } = require('../runtimes/jarSearch.js')
+const { ownerExited } = require('./runScratch.js')
 
 const XML_LIMIT = 256 * 1024
 const TOOL_TOKEN = /^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$/
@@ -17,13 +18,18 @@ const MODELS = ['maven', 'ant', 'eclipse']
 const BAD_ARGUMENTS = 'Tomcat VM 인자를 한 줄에 입력하고 공백이 있는 인자는 따옴표로 묶어 주세요.'
 const BAD_WEBAPP = '워크트리 안에서 WEB-INF가 있는 웹 폴더를 선택해 주세요.'
 
-function vmOptionTokens(raw, invalid = BAD_ARGUMENTS) {
+function vmOptionTokens(raw, invalid = BAD_ARGUMENTS, combineModuleOptions = false) {
   if (typeof raw !== 'string' || raw.length > 4096 || /[\x00-\x08\x0a-\x1f\x7f\u2028\u2029]/u.test(raw)) throw new Error(invalid)
   const tokens = []
   let word = ''
   let quote = ''
   const finish = () => {
     if (!word) return
+    if (combineModuleOptions && /^--add-(?:opens|exports|reads)$/.test(tokens.at(-1)) && /^[\w.$/-]+=[\w.$,-]+$/.test(word)) {
+      tokens[tokens.length - 1] += `=${word}`
+      word = ''
+      return
+    }
     if (!word.startsWith('-') || word === '-') throw new Error(invalid)
     tokens.push(word)
     word = ''
@@ -247,8 +253,8 @@ async function makeBase(userData, id, conf, configure, encoding) {
     try {
       const owner = Number(match[1])
       if (owner) {
-        try { process.kill(owner, 0); continue }
-        catch (error) { if (error.code !== 'ESRCH') continue }
+        // A server handed over by the app before an update still runs on its base (runScratch.js)
+        if (!ownerExited(owner)) continue
       } else if (Date.now() - (await fs.stat(orphan)).mtimeMs < LEGACY_BASE_MAX_AGE) continue
       await removeBase(orphan)
     } catch { /* Retry on the next launch if the directory is busy. */ }
