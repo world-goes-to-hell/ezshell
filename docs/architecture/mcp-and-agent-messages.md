@@ -4,7 +4,7 @@
 
 `src/mcp/` 에 SSH용 MCP 서버가 있다. Claude Code 등록 이름은 `ezshell-ssh-mcp` 다. "Claude Code 자동 설정"에서 같은 설정 파일의 옛 이름 `ez-shell` 과 `my-ssh-client` 를 갱신한다 (`controller.js` 의 `LEGACY_SERVER_NAMES`). `~/.claude.json` 의 프로젝트별 등록은 화면에 표시한다. 설정 > MCP > SSH MCP 에서 켜면 `127.0.0.1:<포트>/mcp` (Streamable HTTP, stateless) 로 열린다.
 
-설정 > MCP > 에이전트 메시지에서 `ezshell-cli-mcp` 를 등록하면 일반 터미널에서 실행한 Codex·Claude Code도 `src/ipc/agentMessages.js` 의 메시지함을 쓴다. 사용자 설정은 앱의 사용자 데이터 폴더에 있는 연결 파일을 참조한다. 앱을 시작할 때 실행 파일과 인증 정보를 갱신하고, 살아 있는 MCP 연결만 `list_agents` 에 표시한다.
+설정 > MCP > 에이전트 메시지에서 `ezshell-cli-mcp` 를 등록하면 일반 터미널에서 실행한 Codex·Claude Code도 `src/ipc/agentMessages.js` 의 메시지함을 쓴다. 사용자 설정은 앱의 사용자 데이터 폴더에 있는 연결 파일을 참조한다. 앱을 시작할 때 실행 파일과 인증 정보를 갱신하고, `list_agents` 에는 살아 있는 MCP 연결과 함께, 로컬 터미널에서 돌지만 메시지 MCP 가 없는 에이전트도 `connected: false` 로 나온다 (보내기는 거부한다. 폴더의 에이전트를 세는 에이전트가 사이드바와 다르게 세지 않게, 2026-11-28 사용자 보고). 사이드바 칩은 점선 테두리이고 툴팁의 상태 줄에 `메시지 연결 없음` (`lib/agentIdentity.ts` 의 `messagesUnreachable`). 업데이트 뒤 터미널에서 직접 띄운 CLI 가 다시 붙는 경로는 `docs/fix/2026-11-28-typed-agents-after-update.md`.
 
 같은 설정의 `Aside 등 외부 MCP 클라이언트`에서 Command와 Env를 복사해 Aside의 Local stdio 서버에 붙여 넣을 수 있다. 기존 등록을 쓰고 있다면 `EZSHELL_AGENT_BRIDGE_KIND=aside`로 바꾸고 MCP를 다시 연결한다. Env에는 연결 파일 경로와 종류가 들어간다. Aside는 공용 브리지에서 `aside-N`으로 등록되며 셸 연결과 대화 UUID가 없다. 역할은 현재 연결에서 메모리에 보관한다. 새 메시지 알림이나 터미널 깨우기를 받지 않으므로 작업을 시작할 때와 진행 중에 `read_inbox`로 받은편지함을 확인한다.
 - 한계: 셸이 없어 `inspect_agent` 의 상태는 늘 알 수 없음이고, 보낸 쪽 `check_sent` 에 `unread` 가 오래 남는 것이 정상이다 (Aside 가 스스로 확인할 때까지). 다시 연결할 때마다(MCP 재시작, ezShell 재시작) 새 `aside-N` id 가 된다. 프로세스 계보로 같은 에이전트임을 확인할 수 없어 재연결 복구를 하지 않는다. 옛 id 앞으로 온 메시지는 새 id 로 이어지지 않는다.

@@ -3,7 +3,7 @@ import {
   RiChat1Line, RiCircleLine,
   RiErrorWarningLine, RiHourglassLine, RiPlayCircleLine, RiPlayFill, RiRecordCircleLine, RiStopCircleLine, RiMoonLine, RiTimeLine
 } from 'react-icons/ri'
-import { agentIdentityColor, agentIdentityStatus, agentIdentityTooltip, localAgentName } from '../../lib/agentIdentity'
+import { agentIdentityColor, agentIdentityStatus, agentIdentityTooltip, localAgentName, messagesUnreachable } from '../../lib/agentIdentity'
 import { localAgentPaneLocation } from '../../lib/localPaneShells'
 import { focusTabPane } from '../../lib/paneFocus'
 import { MAIN_PANE } from '../../lib/splitTree'
@@ -74,6 +74,7 @@ export function LocalSessionAgents({ tabId }: { tabId: string }) {
             data-agent-kind={agent.kind}
             data-agent-work={isAgentWorking(agent) ? 'working' : 'idle'}
             data-status={status}
+            data-messages={messagesUnreachable(agent) ? 'unreachable' : undefined}
             {...tooltip}
             aria-label={tooltip.title.replace(/\n/g, ', ')}
             onClick={() => {

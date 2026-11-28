@@ -107,6 +107,16 @@ if (process.argv[2] === 'fail') {
     check('nine presets show a single summary with all status counts at the default of eight', await js(`
       ${summary}.textContent.includes('실행 9') && ${rowCount} === 0 &&
       ['running', 'crashed', 'unresponsive'].every(status => document.querySelector('[data-run-filter="' + status + '"]').textContent === '0')`))
+    await js(`document.querySelector('.sidebar').style.setProperty('--sidebar-width', '160px')`)
+    check('a narrow sidebar keeps the summary title, counts and panel button in view', await until(`(() => {
+      const head = ${summary}
+      const bounds = head.getBoundingClientRect()
+      return head.clientWidth < 150 && [...head.children].every(child => {
+        const rect = child.getBoundingClientRect()
+        return rect.width > 0 && child.scrollWidth <= child.clientWidth && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1
+      })
+    })()`))
+    await js(`document.querySelector('.sidebar').style.removeProperty('--sidebar-width')`)
 
     await setThreshold(9)
     check('a threshold equal to the count keeps the full list and its existing controls', await until(`

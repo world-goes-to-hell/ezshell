@@ -24,6 +24,45 @@ function createAgentHookState(kind) {
   }
 }
 
+// The session host keeps metadata as JSON. Only the reducer's bounded state goes with a kept shell.
+function exportAgentHookState(state) {
+  if (!state || state.phase === 'ended') return null
+  const { closedTurns, dialogs, closedTools, ...fields } = state
+  return {
+    ...fields,
+    closedTurns: [...closedTurns],
+    dialogs: [...dialogs].slice(-CLOSED_LIMIT).map(([id, at]) => [id === ANONYMOUS_DIALOG ? null : id === NOTIFICATION_DIALOG ? '' : id, at]),
+    closedTools: [...closedTools]
+  }
+}
+
+function restoreAgentHookState(saved, kind, now) {
+  if (saved?.kind !== kind || ![null, 'idle', 'working'].includes(saved.phase)) return null
+  const time = value => Number.isSafeInteger(value) && value >= 0 && value <= now
+  const id = value => typeof value === 'string' && /^[a-z0-9][a-z0-9_-]{0,99}$/i.test(value)
+  const sessionId = typeof saved.sessionId === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(saved.sessionId)
+    ? saved.sessionId : null
+  if (!time(saved.seenAt) || !time(saved.sessionAt) || !time(saved.turnAt)) return null
+  const pairs = (value, key) => new Map(Array.isArray(value) ? value.slice(-CLOSED_LIMIT).flatMap(pair => {
+    if (!Array.isArray(pair) || pair.length !== 2 || !time(pair[1])) return []
+    const normalized = key(pair[0])
+    return normalized === undefined ? [] : [[normalized, pair[1]]]
+  }) : [])
+  const named = value => id(value) ? value : undefined
+  const knownTurn = saved.turn && time(saved.turn.startedAt) && (saved.turn.id === undefined || id(saved.turn.id))
+  const lastStop = saved.lastStop
+  return {
+    kind, phase: saved.phase, sessionId, seenAt: saved.seenAt, sessionAt: saved.sessionAt, turnAt: saved.turnAt,
+    turn: knownTurn ? { id: saved.turn.id, startedAt: saved.turn.startedAt } : null,
+    closedTurns: pairs(saved.closedTurns, named),
+    dialogs: pairs(saved.dialogs, value => value === null ? ANONYMOUS_DIALOG : value === '' ? NOTIFICATION_DIALOG : named(value)),
+    closedTools: pairs(saved.closedTools, named),
+    absentSince: null,
+    lastStop: lastStop && time(lastStop.at) && time(lastStop.seenAt)
+      ? { id: named(lastStop.id), at: lastStop.at, seenAt: lastStop.seenAt, corrected: lastStop.corrected === true } : null
+  }
+}
+
 function hookStatus(state) {
   if (!state) return null
   return state.dialogs.size ? 'blocked' : state.phase
@@ -41,6 +80,14 @@ function endTurn(state, promptId, at) {
   state.turn = null
   state.phase = 'idle'
   closeDialogs(state, at)
+}
+
+// A kept CLI can finish while no unlocked app is listening to its hooks. Preserve the old turn's
+// ordering boundary and give the live screen control until the next authenticated event.
+function endAgentHookHandoff(state) {
+  endTurn(state, state.turn?.id, Math.max(state.turnAt, state.seenAt))
+  state.phase = null
+  state.lastStop = null
 }
 
 function correctTurn(state, at) {
@@ -79,51 +126,51 @@ function applyDialogHook(state, report, screenBlocked) {
 
 function applyAgentHook(state, report, seenAt, { sleeping = false, stopBlocked = false, screenBlocked = false } = {}) {
   const { event, promptId, sessionId, startedAt: at, notification } = report
-  if (event === 'SessionEnd' && sleeping) return
+  if (event === 'SessionEnd' && sleeping) return false
   state.seenAt = seenAt
   if (report.subagent) {
     if (state.phase !== 'ended' && at >= state.turnAt) applyDialogHook(state, report, screenBlocked)
-    return
+    return false
   }
 
   if (event === 'SessionStart') {
-    if (at < state.sessionAt || (sessionId && sessionId !== state.sessionId && at < state.turnAt)) return
+    if (at < state.sessionAt || (sessionId && sessionId !== state.sessionId && at < state.turnAt)) return false
     state.sessionAt = at
     if (sessionId) state.sessionId = sessionId
     if (!state.turn) {
       state.phase = 'idle'
       state.lastStop = null
     }
-    return
+    return true
   }
-  if (sessionId && state.sessionId && sessionId !== state.sessionId) return
+  if (sessionId && state.sessionId && sessionId !== state.sessionId) return false
   if (sessionId && !state.sessionId) {
     state.sessionId = sessionId
     state.sessionAt = at
   }
-  if (at < state.sessionAt && !state.turn) return
-  if (state.phase === 'ended') return
+  if (at < state.sessionAt && !state.turn) return false
+  if (state.phase === 'ended') return false
   if (event === 'SessionEnd') {
-    if (at < state.turnAt) return
+    if (at < state.turnAt) return false
     endTurn(state, promptId, at)
     state.phase = 'ended'
     state.lastStop = null
-    return
+    return true
   }
-  if ((promptId && at <= (state.closedTurns.get(promptId) ?? -Infinity)) || at < state.turnAt) return
+  if ((promptId && at <= (state.closedTurns.get(promptId) ?? -Infinity)) || at < state.turnAt) return false
 
   if (event === 'UserPromptSubmit') {
-    if (state.turn && (state.turn.id === promptId || (!promptId && state.turn.id))) return
+    if (state.turn && (state.turn.id === promptId || (!promptId && state.turn.id))) return false
     closeDialogs(state, at)
     state.turn = { id: promptId, startedAt: at }
     state.turnAt = at
     state.phase = 'working'
     state.lastStop = null
-    return
+    return true
   }
   if (state.turn?.id && promptId && state.turn.id !== promptId) {
     if (CLOSE_TURN.has(event)) remember(state.closedTurns, promptId, at)
-    return
+    return false
   }
   const stop = state.lastStop
   if (stop?.corrected && promptId && promptId === stop.id && at > stop.at && CONTINUE_TURN.has(event)) {
@@ -140,7 +187,7 @@ function applyAgentHook(state, report, seenAt, { sleeping = false, stopBlocked =
       endTurn(state, id, at)
       state.lastStop = event === 'Stop' ? { id, at, seenAt } : null
     }
-    return
+    return true
   }
   applyDialogHook(state, report, screenBlocked)
   if (event === 'PreCompact') {
@@ -149,6 +196,7 @@ function applyAgentHook(state, report, seenAt, { sleeping = false, stopBlocked =
   } else if ((event === 'PostCompact' || notification === 'idle_prompt') && !state.turn && !state.dialogs.size) {
     state.phase = 'idle'
   }
+  return true
 }
 
 /** Apply screen/title fallbacks and return the next time they need a check, if any. */
@@ -188,4 +236,4 @@ function reconcileAgentHook(state, { now, title, screenBlocked, interruptedAt })
   return null
 }
 
-module.exports = { createAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook }
+module.exports = { createAgentHookState, exportAgentHookState, restoreAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook, endAgentHookHandoff }

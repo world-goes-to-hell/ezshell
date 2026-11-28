@@ -187,6 +187,79 @@ describe('local shells in the session host', () => {
     expect(host.setMeta).toHaveBeenCalledWith(id, expect.objectContaining({ modes: { '1': true, '2004': true } }))
   })
 
+  it('shows a kept Codex as working with metadata from an older app', () => {
+    const host = fakeHost()
+    const setStatus = vi.fn()
+    const agents = { adopt: () => ({ setStatus, close: vi.fn() }), agentsOfShell: () => ['codex-1'] }
+    const { shells } = setup({ host, agents })
+    shells.adopt([{ id: 'local:1', pid: 700, meta: { agent: 'codex' }, buffer: '\x1b]0;⠋ Codex\x07' }])
+    expect(setStatus).toHaveBeenLastCalledWith('working', 'screen')
+    shells.close('local:1')
+  })
+
+  it('keeps the verified Codex turn and timing through adoption and recognizes its completion', () => {
+    const firstHost = fakeHost()
+    const nextHost = fakeHost()
+    const setStatus = vi.fn()
+    const agentId = 'codex-1'
+    const sessionId = '01234567-89ab-cdef-0123-456789abcdef'
+    const agents = {
+      register: () => ({ env: { EZSHELL_AGENT_ID: agentId }, setStatus, close: vi.fn() }),
+      adopt: () => ({ setStatus, close: vi.fn() }), agentsOfShell: () => [agentId]
+    }
+    const first = setup({ host: firstHost, agents }).shells
+    const next = setup({ host: nextHost, agents }).shells
+    const { id } = first.open({ agent: 'codex', resume: sessionId })
+    const startedAt = Date.now()
+    const event = { kind: 'codex', sessionId, promptId: 'turn-one', startedAt }
+    first.write(id, 'first question')
+    first.write(id, '\r')
+    first.reportAgentHook(id, agentId, { ...event, event: 'UserPromptSubmit' })
+    const misleading = '\x1b]7501;app=codex:state=idle\x07'
+    firstHost.remotes.get(id).remote.data(misleading)
+    expect(setStatus).toHaveBeenLastCalledWith('working', 'hook')
+    first.handOver()
+    const saved = JSON.parse(JSON.stringify(firstHost.setMeta.mock.calls[0][1]))
+    expect(saved.codex).toMatchObject({ submitted: true, activity: { sessionId, submittedAt: expect.any(Number) } })
+    next.adopt([{ id, pid: 700, meta: saved, buffer: misleading }])
+    expect(setStatus).toHaveBeenLastCalledWith('working', 'hook')
+    next.reportAgentHook(id, agentId, { ...event, startedAt: Date.now(), event: 'Stop' })
+    expect(setStatus).toHaveBeenLastCalledWith('idle', 'hook')
+    first.close(id)
+    next.close(id)
+  })
+
+  it('recognizes a Codex turn that ended while its app was restarting', () => {
+    const host = fakeHost()
+    const setStatus = vi.fn()
+    const agents = { adopt: () => ({ setStatus, close: vi.fn() }), agentsOfShell: () => ['codex-1'] }
+    const { shells } = setup({ host, agents })
+    const at = Date.now() - 100
+    const codex = { submitted: true, reportedStatus: 'working',
+      hook: { kind: 'codex', phase: 'working', sessionAt: at, seenAt: at, turnAt: at, turn: { id: 'old-turn', startedAt: at } } }
+    shells.adopt([{ id: 'local:1', pid: 700, meta: { agent: 'codex', codex }, buffer: '\x1b]7501;app=codex:state=working\x07' }])
+    shells.reportAgentHook('local:1', 'codex-1', { kind: 'codex', event: 'PreToolUse', promptId: 'earlier-turn', startedAt: at - 1 })
+    host.remotes.get('local:1').remote.data('\x1b]7501;app=codex:state=idle\x07')
+    expect(setStatus).toHaveBeenLastCalledWith('idle', 'screen')
+    shells.reportAgentHook('local:1', 'codex-1', { kind: 'codex', event: 'UserPromptSubmit', promptId: 'old-turn', startedAt: at })
+    expect(setStatus).toHaveBeenLastCalledWith('idle', 'screen')
+    shells.close('local:1')
+  })
+
+  it('uses a program status received during the restart over the saved rollout turn', () => {
+    const host = fakeHost()
+    const setStatus = vi.fn()
+    const agents = { adopt: () => ({ setStatus, close: vi.fn() }), agentsOfShell: () => ['codex-1'] }
+    const { shells } = setup({ host, agents })
+    const now = Date.now()
+    const resumeId = '01234567-89ab-cdef-0123-456789abcdef'
+    const codex = { submitted: true, reportedStatus: 'working',
+      activity: { sessionId: resumeId, startedAt: now - 1000, submittedAt: now - 900, oscAt: now - 700, turn: { at: now - 500, status: 'working' } } }
+    shells.adopt([{ id: 'local:1', pid: 700, meta: { agent: 'codex', resumeId, codex }, buffer: '\x1b]7501;app=codex:state=idle\x07' }])
+    expect(setStatus).toHaveBeenLastCalledWith('idle', 'screen')
+    shells.close('local:1')
+  })
+
   // 2026-11-26 user report: after the update, sending from the chat view failed with "에이전트의 입력칸을 찾지
   // 못했습니다" until the terminal was shown once. The wake's screen started empty and an idle CLI draws nothing.
   it.each(readdirSync(new URL('./ipc/fixtures/agent-inbox-pty/', import.meta.url)).filter(name => name.endsWith('.json')).map(name => name.slice(0, -5)))('reads an adopted agent’s screen from what the host kept (%s), so the chat sends at once', async name => {

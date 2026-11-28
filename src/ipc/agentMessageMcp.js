@@ -181,7 +181,7 @@ async function main() {
       return { content: [{ type: 'text', text: current === lease ? error.message : RECONNECTING }], isError: true }
     }
   }
-  server.registerTool('list_agents', { description: 'List connected ezShell agents with their IDs and roles, along with your own agent ID. Use it to find the ID of an agent named by its role.' },
+  server.registerTool('list_agents', { description: 'List ezShell agents with their IDs and roles, along with your own agent ID. Use it to find the ID of an agent named by its role. An agent with connected: false runs in an ezShell terminal but its message connection is down: messages to it are refused, so tell the user instead.' },
     () => call({ method: 'list' }))
   server.registerTool('inspect_agent', {
     description: 'Inspect an ezShell agent by ID. Returns status, source, what is blocking it, unread count, idle milliseconds and exit code.',

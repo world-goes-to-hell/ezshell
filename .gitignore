@@ -55,3 +55,6 @@ release-verify/
 
 # Screen test screenshots
 e2e/.out/
+
+# Mockup starter kit, made by npm run mockup:kit (docs/mockups.md)
+mockups/_kit/

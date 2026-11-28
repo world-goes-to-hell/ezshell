@@ -598,12 +598,14 @@ async function run() {
     `))
 
     fs.writeFileSync(file('codex-3-mcp-disconnect'), '')
-    check('a disconnected MCP drops off the live list even while its terminal remains open', await until(`
+    check('a disconnected MCP leaves the agent without a message connection while its terminal remains open', await until(`
       window.electronAPI.agentMessagesSnapshot().then(state =>
         state.agents.some(agent => agent.id === 'codex-3' && agent.active && !agent.mcpConnected))
     `))
     const live = await mcp('codex-1', 'list_agents')
-    check('list_agents returns only connected agents', live.agents.map(agent => agent.id).join(',') === 'codex-1')
+    // 2026-11-28: it stays on the list as connected: false (its terminal is open), and sending to it is refused
+    check('list_agents keeps the disconnected agent of an open terminal as connected: false',
+      JSON.stringify(live.agents.map(agent => [agent.id, agent.connected ?? true])) === JSON.stringify([['codex-1', true], ['codex-3', false]]), JSON.stringify(live.agents))
 
     const plainShell = await js(`[...document.querySelectorAll('.local-terminal-pane')]
       .find(pane => pane.dataset.localTabId === ${JSON.stringify(targetId)} && !pane.querySelector('.agent-pane-mail'))

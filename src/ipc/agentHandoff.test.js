@@ -118,6 +118,20 @@ describe('handing agents over to the app after an update', () => {
     expect(next.agentsOfShell('local:3')).toEqual([env.EZSHELL_AGENT_ID])
   })
 
+  // The unlock can open the record before the bridge starts (the session host is still coming up). The app then
+  // still listens on the handed-over pipe: on a new one the CLIs still running never reached it (2026-11-28)
+  it('listens on the handed-over pipe even when the record is opened before it starts, and takes it once', async () => {
+    const { env } = await before()
+    const next = app({ handoffEndpoint: readHandoffEndpoint(files) })
+    const record = takeAgentHandoff({ ...files, masterPassword: PASSWORD })
+    expect(next.importHandoff(record)).toBe(true)
+    await next.ready()
+    const inbox = await rpc({ method: 'inbox', unread: true }, { pipe: env.EZSHELL_AGENT_PIPE, token: env.EZSHELL_AGENT_TOKEN })
+    expect(inbox.success).toBe(true)
+    expect(inbox.messages.map(message => message.text)).toEqual(['업데이트 뒤에도 남아 있어야 하는 메시지'])
+    expect(next.importHandoff(record)).toBe(false)
+  })
+
   it('stops taking a handed-over token once the agent’s CLI ends', async () => {
     const { env } = await before()
     const next = app({ handoffEndpoint: readHandoffEndpoint(files) })

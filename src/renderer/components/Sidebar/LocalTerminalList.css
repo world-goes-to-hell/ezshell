@@ -482,6 +482,12 @@
   cursor: pointer;
 }
 
+/* Running, but its message MCP is not connected: other agents cannot reach it (the tooltip says so) */
+.local-agent-chip[data-messages='unreachable'] {
+  border-style: dashed;
+  border-color: var(--warning);
+}
+
 .local-agent-chip:hover,
 .local-agent-chip:focus-visible {
   border-color: var(--border-strong);

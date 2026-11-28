@@ -1,7 +1,7 @@
 // Saved session discovery and keyboard navigation, renaming, transfer retry and close-time tab state.
 const fs = require('node:fs')
 const path = require('node:path')
-const { connect, connectSsh, createChecks, unlock, sleep, SET, PANEL } = require('../support/driver')
+const { connect, connectSsh, createChecks, isMainPage, pages, unlock, sleep, SET, PANEL } = require('../support/driver')
 const { decrypt } = require('../../src/crypto')
 const { check, finish } = createChecks()
 
@@ -167,11 +167,25 @@ const { check, finish } = createChecks()
     `document.querySelectorAll('.terminal-tab').length === ${tabCount + 1} && ${selector('[data-session-id="server-staging"]')}?.classList.contains('active')`, 15000))
 
   const savedFile = path.join(process.env.E2E_PROFILE, 'restore-tabs.json')
+  const mainPage = (await pages()).find(isMainPage)
+  if (!mainPage) throw new Error('Could not find the main window before closing')
   void clickElement('.title-bar-close').catch(() => {})
-  for (let i = 0; i < 50 && !fs.existsSync(savedFile); i++) await sleep(100)
+  // A checkpoint can already exist while the window is open. Closing flushes the final snapshot.
+  let closed = false
+  for (let i = 0; i < 50; i++) {
+    closed = !(await pages()).some(page => page.id === mainPage.id)
+    if (closed) break
+    await sleep(100)
+  }
+  if (!closed) throw new Error('The main window did not close')
   const envelope = JSON.parse(fs.readFileSync(savedFile, 'utf8'))
   const snapshot = JSON.parse(decrypt(envelope.data, 'test-pass-1234'))
+  const production = snapshot.tabs.find(tab => tab.savedSessionId === 'server-production')
+  const active = snapshot.tabs[snapshot.active]
   check('a normal close saves the renamed tab and SFTP location', envelope.source === 'close'
-    && snapshot.tabs.some(tab => tab.savedSessionId === 'server-production' && tab.title === 'Deployment' && tab.sftpPath === '/var'))
+    && production?.title === 'Deployment' && production.sftpPath === '/var',
+  JSON.stringify({ source: envelope.source, title: production?.title, sftpPath: production?.sftpPath }))
+  check('the saved layout includes the SSH tab opened just before closing', active?.savedSessionId === 'server-staging',
+    active?.savedSessionId)
   finish()
 })().catch((error) => { console.error(error); process.exit(1) })

@@ -28,8 +28,7 @@ const beforeCardStyles = `
     --local-pane-trace: var(--pane-trace-color) !important;
     box-shadow: none !important;
   }
-  .local-terminal-tab.is-split > .local-terminal-pane:not(:focus-within, [data-agent-work='working'])::before,
-  .local-terminal-tab.is-split .agent-chat-head::before { content: none !important; }
+  .local-terminal-tab.is-split > .local-terminal-pane:not(:focus-within, [data-agent-work='working'])::before { content: none !important; }
   .local-terminal-tab.is-split .agent-chat-head { border-bottom-color: var(--border) !important; }
 `
 
@@ -103,7 +102,8 @@ function edgePoints({ rect, dpr }, edge, depths) {
     }
   }
   async function setChatTheme(label, expected) {
-    const button = cover + ".querySelector('.agent-chat-theme-trigger')"
+    const button = cover + "?.querySelector('.agent-chat-theme-trigger')"
+    await requireState('!!' + button, 'the chat theme picker is not visible')
     await click(...await center(button))
     const option = `[...document.querySelectorAll('.select-menu-content [role="menuitemradio"]')]
       .find(item => item.textContent.trim().startsWith(${JSON.stringify(label)}))`
@@ -342,18 +342,24 @@ function edgePoints({ rect, dpr }, edge, depths) {
       await checkCardEdge(scene.name + ' chat grid')
       await js(composer + '.focus()')
       await setWorking(true)
-      check(`${scene.name} chat cards use their theme corners and 3px provider stripes`, await js(`
-        [${grid.join(', ')}].every((frame, index) => {
+      const cards = await js(`
+        [${grid.join(', ')}].map(frame => {
           const head = frame.querySelector('.agent-chat-head')
-          const stripe = getComputedStyle(head, '::before')
-          const expected = ['rgb(217, 119, 87)', 'rgb(132, 154, 179)', 'rgb(132, 154, 179)', 'rgb(217, 119, 87)'][index]
+          if (!head) return null
+          const badge = head.querySelector('.agent-chat-kind')
           const header = getComputedStyle(head)
           const card = getComputedStyle(frame)
-          return stripe.width === '3px' && stripe.left === '3px' && stripe.backgroundColor === expected &&
-            header.borderBottomWidth === '1px' && card.borderRadius === ${JSON.stringify(scene.radius)} && card.boxShadow !== 'none' &&
-            (frame.matches(':focus-within') || header.borderBottomColor === getComputedStyle(frame, '::before').borderBottomColor)
+          return { provider: badge?.dataset.kind, visibleBadge: badge?.checkVisibility({ visibilityProperty: true }) === true,
+            stripe: getComputedStyle(head, '::before').content, radius: card.borderRadius, shadow: card.boxShadow,
+            headerWidth: header.borderBottomWidth, headerColor: header.borderBottomColor,
+            cardColor: getComputedStyle(frame, '::before').borderBottomColor, focused: frame.matches(':focus-within') }
         })
-      `))
+      `)
+      const providers = ['claude', 'codex', 'codex', 'claude']
+      check(`${scene.name} chat cards use theme corners, matching dividers and provider badges`, cards.every((card, index) =>
+        card?.provider === providers[index] && card.visibleBadge && ['none', 'normal'].includes(card.stripe) &&
+        card.radius === scene.radius && card.shadow !== 'none' && card.headerWidth === '1px' &&
+        (card.focused || card.headerColor === card.cardColor)), JSON.stringify(cards))
       await js(trace + '.pause(); ' + trace + '.currentTime = ' + phase[2])
       await sleep(120)
       const save = async layout => fs.writeFileSync(path.join(output, `local-agent-pane-cards-${layout}-${scene.name}.png`), Buffer.from(await screenshotData(), 'base64'))
@@ -363,7 +369,7 @@ function edgePoints({ rect, dpr }, edge, depths) {
       await setWorking(false)
       await showChat(false, right)
       await showChat(false, lowerLeft)
-      check(`${scene.name} mixed grid retains two terminal cards alongside the chats`, await js(`
+      check(`${scene.name} mixed grid retains two terminal cards alongside the chats`, await until(`
         !${right}.hasAttribute('data-chat-kind') && !${lowerLeft}.hasAttribute('data-chat-kind') &&
         ${pane}.dataset.chatKind === 'claude' && ${lowerRight}.dataset.chatKind === 'claude'
       `))
@@ -434,7 +440,8 @@ function edgePoints({ rect, dpr }, edge, depths) {
       await js(terminal + '.focus()')
       // A CUP position past the terminal dimensions marks the bottom-right cell.
       const markerColor = [13, 137, 44]
-      fs.writeFileSync(path.join(profile, 'claude-1-screen'), '\x1b[999;999H\x1b[38;2;' + markerColor.join(';') + 'm█\x1b[0m\x1b[1;1H')
+      const screenFile = path.join(profile, 'claude-1-screen')
+      fs.writeFileSync(screenFile, '\x1b[999;999H\x1b[38;2;' + markerColor.join(';') + 'm█\x1b[0m\x1b[1;1H')
       const cell = "[..." + pane + ".querySelectorAll('.xterm-rows span')].find(span => span.textContent === '█')"
       await requireState('!!(' + cell + ')', 'the last terminal cell did not render')
       const cellInfo = "(() => { const bounds = (" + cell + ").getBoundingClientRect(); const frame = " + pane + ".getBoundingClientRect(); " +
@@ -454,6 +461,10 @@ function edgePoints({ rect, dpr }, edge, depths) {
         workingCell.rightGap >= inset && workingCell.bottomGap >= inset &&
         JSON.stringify(workingCell) === JSON.stringify(idleCell), JSON.stringify({ idleCell, workingCell, ink }))
       if (capture) fs.writeFileSync(path.join(output, 'pane-contrast-' + capture + '-terminal-last-cell.png'), Buffer.from(screenshot, 'base64'))
+      // The fake CLI keeps the replacement screen until we clear it. The chat watcher would hand it back to the terminal.
+      fs.writeFileSync(screenFile, '')
+      await requireState(`window.electronAPI.agentChatScreenState(${pane}.dataset.localShellId).then(state =>
+        typeof state?.composer === 'string')`, 'the Claude fixture did not restore its composer')
       await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
       await captureGrid()
     }

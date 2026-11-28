@@ -69,6 +69,18 @@ fs.writeFileSync(path.join(folder, 'service.cjs'), 'console.log(process.argv[2] 
         states['${ids.order}'].lastAction?.at <= states['${ids.gateway}'].lastAction?.at
     })()`, 15000))
     check('the head offers stopping the bundle', await until(`${go}.textContent.trim() === '주문 개발 중지'`))
+    await js(`document.querySelector('.sidebar').style.setProperty('--sidebar-width', '180px')`)
+    check('a narrow sidebar keeps the running title and bundle controls in view', await until(`(() => {
+      const head = document.querySelector('.run-presets-head')
+      const title = head.firstElementChild
+      const bounds = head.getBoundingClientRect()
+      return head.clientWidth < 160 && title.textContent === '실행 · 2개 실행 중' &&
+        title.scrollWidth <= title.clientWidth && [...head.querySelectorAll('button')].every(button => {
+          const rect = button.getBoundingClientRect()
+          return rect.width > 0 && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 && rect.bottom <= bounds.bottom + 1
+        })
+    })()`))
+    await js(`document.querySelector('.sidebar').style.removeProperty('--sidebar-width')`)
     await shot('local-run-bundle-running')
     await js(`${go}.click()`)
     check('stopping the bundle stops its presets', await until(`(async () => {

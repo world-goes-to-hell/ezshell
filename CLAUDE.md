@@ -17,6 +17,10 @@ npm run build:portable  # 포터블 exe (배포 때는 GitHub Actions 가 만든
 npm run build:publish   # GitHub Releases 배포 (설치형·latest.yml 만, electron-updater)
 ```
 
+### 목업
+
+화면 목업(`mockups/*.html`)은 실제 앱에서 뜬 시작 틀(`npm run build` 뒤 `npm run mockup:kit` → `mockups/_kit/app.html`, `ezshell.css`)을 복사해 바꾸려는 영역만 고친다. 바꾸면 안 되는 것: 색·서체·모서리를 새로 짓지 않고 앱의 클래스와 CSS 변수만 쓴다 (2026-11-28 사용자 요청: 디자인을 새로 지어낸 목업은 무엇을 바꾸자는지 읽기 어렵다). [목업 만들기](docs/mockups.md)
+
 ### 화면 테스트
 
 `npm run build` 뒤 `npm run e2e` (전부) 또는 `npm run e2e -- shortcuts` (하나). `e2e/run.js`는 명세마다 임시 프로필로 빌드된 앱을 띄우고 CDP로 조작한 뒤 끝낸다. 화면 캡처는 `e2e/.out/`에 둔다. `ssh-` 명세에서는 실행기가 `e2e/support/sshd.js`로 시험용 서버를 띄운다. 새 명세는 `e2e/support/driver.js`를 쓰고 콘솔 오류와 CSP 거부는 `pageProblems`로 확인한다. [명세와 도우미](docs/architecture/screen-tests.md)

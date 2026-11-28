@@ -20,7 +20,8 @@
     "build:icon": "electron scripts/build-icon.cjs",
     "test": "vitest run",
     "e2e": "node e2e/run.js",
-    "check:agent-cli": "node scripts/agent-cli-check.cjs"
+    "check:agent-cli": "node scripts/agent-cli-check.cjs",
+    "mockup:kit": "node scripts/mockup-kit.cjs"
   },
   "author": "SungKwan",
   "license": "PolyForm-Noncommercial-1.0.0",

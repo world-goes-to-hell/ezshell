@@ -192,10 +192,26 @@ const { check, finish } = createChecks()
     !${secondCard}.querySelector('.local-worktrees') && ${mainCard}.querySelectorAll('.local-worktree').length === 2
   `))
   await registerProjects(otherProject, repo)
-  check('project colors stay with their folders after reordering', await until(`
+  check('automatic project colors follow sidebar order after reordering', await until(`
     ${q('.local-project')} === ${secondCard} &&
-    getComputedStyle(${mainCard}).borderInlineStartColor === ${JSON.stringify(boundaries.colors[0])} &&
-    getComputedStyle(${secondCard}).borderInlineStartColor === ${JSON.stringify(boundaries.colors[1])}
+    getComputedStyle(${secondCard}).borderInlineStartColor === ${JSON.stringify(boundaries.colors[0])} &&
+    getComputedStyle(${mainCard}).borderInlineStartColor === ${JSON.stringify(boundaries.colors[1])}
+  `))
+
+  const colorDialog = q('.project-color-dialog')
+  const rose = `${colorDialog}?.querySelector('.project-color-swatch[aria-label="장미"]')`
+  const hue = card => `Number(${card}.style.getPropertyValue('--local-project-hue'))`
+  await js(`${mainCard}.querySelector('.local-project-head').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }))`)
+  await driver.pick('색상…')
+  await until(`!!${rose}`)
+  await js(`${rose}.click()`)
+  check('the selected rose color goes on the work app project', await until(`${hue(mainCard)} === 350`))
+  await js(`${colorDialog}.querySelector('.modal-actions button').click()`)
+  await until(`!${colorDialog}`)
+  await registerProjects(repo, otherProject)
+  check('a project color picked by the user follows its folder after reordering', await until(`
+    ${q('.local-project')} === ${mainCard} && ${hue(mainCard)} === 350 &&
+    getComputedStyle(${secondCard}).borderInlineStartColor === ${JSON.stringify(boundaries.colors[0])}
   `))
 
   // Taking the project off the list: a second registered folder of the same repository goes with it

@@ -24,14 +24,25 @@ export function agentIdentityTooltip(agent: AgentMessageSession, location?: Agen
   const { status, label } = agentIdentityStatus(agent, archived)
   const detail = role && role !== id ? id : undefined
   const state = status === 'error' && exitCode ? label + ' (종료 코드 ' + exitCode + ')' : label
+  // Running in its terminal but no message MCP: other agents cannot reach it (2026-11-28 user report)
+  const unreachable = messagesUnreachable(agent, archived) ? '메시지 연결 없음' : undefined
   const identity = detail ? role + ' · ' + detail : id
   // Three lines (name / kind · state / place, CLAUDE.md). Where the state came from (hook or screen) is not
   // shown: the user found it noise (2026-11-25)
   // The place of a running agent is its folder's name only: no branch, no pane number (user request,
   // 2026-11-25: "ezshell · main · 칸 2" was too much)
   const place = location ? folderLabel(cwd ?? '') || location.tabLabel.split(' · ')[0] : cwd
-  const title = [identity, [AGENT_PROVIDER_NAMES[kind], state].filter(Boolean).join(' · '), place].filter(Boolean).join('\n')
+  const title = [identity, [AGENT_PROVIDER_NAMES[kind], state, unreachable].filter(Boolean).join(' · '), place].filter(Boolean).join('\n')
   return { title, 'data-tooltip-detail': detail }
+}
+
+/**
+ * A running agent of a local terminal whose message MCP is not connected (list_agents shows it as connected: false,
+ * send refuses it). Not while it starts (its MCP connects a moment later) or sleeps (a message wakes it).
+ */
+export function messagesUnreachable(agent: Pick<AgentMessageSession, 'active' | 'shellId' | 'mcpConnected' | 'status'>, archived = false): boolean {
+  return !archived && agent.active && !!agent.shellId && agent.mcpConnected === false &&
+    !['unknown', 'starting', 'sleeping', 'ended'].includes(agent.status)
 }
 
 export function agentIdentityLabel({ id, role }: Pick<AgentMessageSession, 'id' | 'role'>) {

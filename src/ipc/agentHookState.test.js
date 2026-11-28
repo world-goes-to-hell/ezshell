@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook } from './agentHookState.js'
+import { createAgentHookState, exportAgentHookState, restoreAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook } from './agentHookState.js'
 
 function harness(kind = 'claude') {
   const state = createAgentHookState(kind)
@@ -10,6 +10,21 @@ function harness(kind = 'claude') {
 }
 
 describe('official hook state', () => {
+  it('keeps a bounded dialog history when a Codex turn passes through the session host', () => {
+    const { state, report } = harness('codex')
+    const sessionId = '01234567-89ab-cdef-0123-456789abcdef'
+    report('UserPromptSubmit', 100, { sessionId, promptId: 'first' })
+    for (let i = 0; i < 80; i++) report('PermissionRequest', 200 + i, { sessionId, promptId: 'first', toolUseId: `tool-${i}` })
+    const saved = JSON.parse(JSON.stringify(exportAgentHookState(state)))
+    expect(saved.dialogs).toHaveLength(64)
+    expect(saved.dialogs.at(-1)).toEqual(['tool-79', 279])
+    const restored = restoreAgentHookState(saved, 'codex', 400)
+    expect(hookStatus(restored)).toBe('blocked')
+    expect(restored.turn).toEqual({ id: 'first', startedAt: 100 })
+    applyAgentHook(restored, { event: 'Stop', startedAt: 500, sessionId, promptId: 'first' }, 510)
+    expect(hookStatus(restored)).toBe('idle')
+  })
+
   it('keeps an open turn through compact and changes session identity only on the new start', () => {
     const { report, status, state } = harness()
     report('SessionStart', 100, { sessionId: 'a' })

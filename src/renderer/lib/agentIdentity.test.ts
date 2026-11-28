@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalInfo } from '../stores/terminalStore'
 import type { AgentMessageSession } from '../types'
-import { agentDisplayName, agentIdentityColor, agentShortName, localAgentName, agentIdentityTooltip, agentMessageMatches, agentPaneLocation, agentSearchTerm } from './agentIdentity'
+import { agentDisplayName, agentIdentityColor, agentShortName, localAgentName, agentIdentityTooltip, agentMessageMatches, agentPaneLocation, agentSearchTerm, messagesUnreachable } from './agentIdentity'
 import { MAIN_PANE, singlePane, splitPane, swapPanes } from './splitTree'
 import { AGENT_PROVIDER_ICONS, AGENT_PROVIDER_NAMES } from '../components/ui/agentProviderIcons'
 
@@ -83,6 +83,20 @@ describe('agent identity', () => {
     expect(agentIdentityTooltip({ ...agent, role: agent.id, status: 'error', exitCode: 7 }).title)
       .toBe('claude-1\nClaude Code · 오류 (종료 코드 7)\nC:\\work')
     expect(agentIdentityTooltip(agent, undefined, true).title).toBe('claude-1\nClaude Code · 연결 끊김\nC:\\work')
+  })
+
+  // 2026-11-28 user report: an agent running in its terminal without a message MCP could not be reached
+  it('says when a running agent of a terminal has no message connection', () => {
+    const agent: AgentMessageSession = {
+      id: 'claude-17', shellId: 'local:4', kind: 'claude', cwd: 'C:\\work', active: true, status: 'idle', waitingForReply: false, mcpConnected: false
+    }
+    expect(agentIdentityTooltip(agent).title).toBe('claude-17\nClaude Code · 쉼 · 메시지 연결 없음\nC:\\work')
+    expect(messagesUnreachable(agent)).toBe(true)
+    // Not while it starts or sleeps, not for an agent without a shell, not once connected
+    for (const other of [{ status: 'starting' }, { status: 'unknown' }, { status: 'sleeping' }, { shellId: '' }, { mcpConnected: true }] as Partial<AgentMessageSession>[]) {
+      expect(messagesUnreachable({ ...agent, ...other }), JSON.stringify(other)).toBe(false)
+    }
+    expect(messagesUnreachable(agent, true)).toBe(false)
   })
 
   // Where the state came from (hook or screen) is not shown: the user found it noise (2026-11-25)

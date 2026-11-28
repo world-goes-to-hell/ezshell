@@ -443,7 +443,10 @@ const { setupAutoUpdater, finishQuit, isInstallingOnQuit, isRestartingForUpdate 
   fromMainWindow: (event) => fromMainWindow(event),
   get mainWindow() { return mainWindow; },
   testUpdateRestart: !app.isPackaged && process.env.EZSHELL_TEST_UPDATE_RESTART === '1',
-  keepSessionsForUpdate: () => sessionHost.keep(SESSION_KEEP_MS),
+  keepSessionsForUpdate: () => {
+    if (sessionHost.ready()) localShells?.stageHandover();
+    return sessionHost.keep(SESSION_KEEP_MS);
+  },
   finishSessionQuit
 });
 
@@ -468,12 +471,14 @@ app.whenReady().then(() => {
   createWindow();
   sessionHostStarting = startSessionHost().catch(error => console.error('[sessionHost] start failed:', error.message));
   startMcp();
-  if (fs.existsSync(agentBridgeFile)) {
+  // Agents opened by the app also need their retained pipe when the global bridge was never installed.
+  const externalAgentBridge = fs.existsSync(agentBridgeFile);
+  if (externalAgentBridge || agentMessages.awaitingHandoff()) {
     // After the runtime copy is ready (startSessionHost prepares it first): written before it, the shared
     // bridge named the install folder's exe and a script inside its app.asar, so every Claude/Codex using
     // the global ezshell-cli-mcp ran an ezShell.exe there that held app.asar while an update installed
     // (docs/fix/2026-11-27-update-uninstall-failed-again.md).
-    void sessionHostStarting.then(() => agentMessages.enableExternalBridge())
+    void sessionHostStarting.then(() => externalAgentBridge ? agentMessages.enableExternalBridge() : agentMessages.ready())
       .catch(error => console.error('Failed to start the agent message bridge:', error.code || error.name));
   }
 

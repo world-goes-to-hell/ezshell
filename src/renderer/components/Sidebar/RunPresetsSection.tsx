@@ -186,22 +186,24 @@ export function RunPresetsSection({ folder, projectName, roots }: { folder: stri
         {isSummary ? <RunSummaryHead count={presets.length} counts={summary.counts} onOpen={status => openRunPanel(folder, { status })} />
           : <div className="run-presets-head">
           <span>{batch ? `실행 · ${batch.index + 1}/${batch.total}단계` : head.label}</span>
-          {batch
-            ? <button type="button" onClick={() => void runPresetAction(folder, 'stopAll')}><RiStopFill size={11} aria-hidden="true" /> 모두 중지</button>
-            : <RunBundlePicker folder={folder} runs={project} />}
-          <button type="button" className="run-presets-head-add" onClick={add} title="실행 구성 추가" aria-label="실행 구성 추가">
-            <RiAddLine size={12} aria-hidden="true" />
-          </button>
-          {project.startOrder && <DropdownMenu.Root modal={false}>
-            <DropdownMenu.Trigger asChild>
-              <button type="button" className="run-presets-head-add" aria-label="실행 구성 메뉴" title="실행 구성 메뉴"><RiMoreFill size={13} /></button>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content className="terminal-menu sidebar-popover" align="end" sideOffset={4}>
-                <DropdownMenu.Item className="terminal-menu-item" onSelect={() => setOrdering(true)}>기동 순서…</DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>}
+          <div className="run-presets-head-actions">
+            {batch
+              ? <button type="button" onClick={() => void runPresetAction(folder, 'stopAll')}><RiStopFill size={11} aria-hidden="true" /> 모두 중지</button>
+              : <RunBundlePicker folder={folder} runs={project} />}
+            <button type="button" className="run-presets-head-add" onClick={add} title="실행 구성 추가" aria-label="실행 구성 추가">
+              <RiAddLine size={12} aria-hidden="true" />
+            </button>
+            {project.startOrder && <DropdownMenu.Root modal={false}>
+              <DropdownMenu.Trigger asChild>
+                <button type="button" className="run-presets-head-add" aria-label="실행 구성 메뉴" title="실행 구성 메뉴"><RiMoreFill size={13} /></button>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content className="terminal-menu sidebar-popover" align="end" sideOffset={4}>
+                  <DropdownMenu.Item className="terminal-menu-item" onSelect={() => setOrdering(true)}>기동 순서…</DropdownMenu.Item>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>}
+          </div>
         </div>}
         {batch && <progress className="run-start-progress" aria-label="기동 순서 진행" max={batch.total} value={batch.index + 1} />}
         {(progress?.status === 'paused' || progress?.status === 'cancelled') &&

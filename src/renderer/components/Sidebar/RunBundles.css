@@ -1,5 +1,5 @@
 /* Run bundles (RunBundlePicker, RunBundleDialog): the head's start / stop with the bundle choice */
-.run-bundle-picker { display: inline-flex; flex: none; align-items: stretch; min-width: 0; max-width: 60%; }
+.run-bundle-picker { display: inline-flex; align-items: stretch; min-width: 0; }
 .run-presets-head .run-bundle-picker button { display: inline-flex; align-items: center; }
 .run-bundle-go {
   gap: 3px;
@@ -18,8 +18,10 @@
 .run-bundle-go[data-action="stop"] { color: var(--error-text, var(--error)); }
 .run-bundle-go:disabled { color: var(--text-muted); cursor: default; }
 .run-bundle-go:hover:not(:disabled) { background: var(--bg-hover); }
+.run-bundle-go > svg { flex: none; }
 .run-bundle-go-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-bundle-more {
+  flex: none;
   padding: 0 2px;
   border: 1px solid var(--border);
   border-radius: 0 var(--radius-sm, 4px) var(--radius-sm, 4px) 0;

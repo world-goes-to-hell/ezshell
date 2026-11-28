@@ -8,7 +8,8 @@ const { fileURLToPath } = require('url');
 const { execFile, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const { getProcessTree } = require('./ipc/agentProcessParents.js');
-const { createAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook } = require('./ipc/agentHookState.js');
+const { createAgentHookState, exportAgentHookState, restoreAgentHookState, hookStatus, applyAgentHook, reconcileAgentHook,
+  endAgentHookHandoff } = require('./ipc/agentHookState.js');
 const { POWERSHELL_CODEX_HOOK_ARGS, injectCodexHooks, quoteCodexHookArgs, codexProjectHooksPossible, observeCodexHookReview } = require('./ipc/codexHookLaunch.js');
 const { processCommandLine, processList, resumeCommand, words } = require('./agentIdle.js');
 const { antigravityBrainRoot, openAntigravityTranscript } = require('./agentChat/antigravitySessions.js');
@@ -485,6 +486,36 @@ function keptModes(modes, agent) {
   return agent === 'claude' || agent === 'codex' ? { '2004': true } : {};
 }
 
+/**
+ * What the next app needs to bind again a CLI the user started in a kept shell (handOver): its process, and
+ * whether it had registered its message MCP (then its reconnect credential, handed over too, brings it back
+ * under the same id). Nothing for an agent the app launched (it comes back by its own token) or a sleeping one.
+ */
+function keptExternalMeta(entry) {
+  const binding = entry.externalAgent;
+  if (!binding || binding.antigravity || !['claude', 'codex'].includes(entry.agent)) return {};
+  if (!Number.isSafeInteger(binding.pid) || binding.pid <= 0) return {};
+  return { external: {
+    pid: binding.pid, hadMcp: binding.hadMcp === true,
+    ...(Number.isSafeInteger(binding.mcpProcessStartedAt) && binding.mcpProcessStartedAt > 0 && { mcpProcessStartedAt: binding.mcpProcessStartedAt })
+  } };
+}
+
+/**
+ * The binding a kept shell gets back (adopt): only for the agent kind the shell had, a well-formed record, and a
+ * CLI still running. Whether that process is this shell's CLI is checked again when its MCP connects
+ * (findAgentProcess walks from the MCP process up to this PTY), so a reused pid binds nothing.
+ */
+function keptExternalAgent(external, agent, processAlive) {
+  if (!external || typeof external !== 'object' || !['claude', 'codex'].includes(agent)) return null;
+  const { pid, hadMcp, mcpProcessStartedAt } = external;
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !processAlive(pid)) return null;
+  return {
+    pid, hadMcp: hadMcp === true,
+    ...(Number.isSafeInteger(mcpProcessStartedAt) && mcpProcessStartedAt > 0 && { mcpProcessStartedAt })
+  };
+}
+
 function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
   const output = entry.oscTail + data;
   const sequences = /\x1b\](0|2|7|9|777|7501);([^\x07\x1b]{0,4096})(?:\x07|\x1b\\)/g;
@@ -515,7 +546,7 @@ function trackTerminalOsc(entry, data, platform, replyToProbe = true) {
       if (app && app !== entry.agent && !(entry.agent === 'claude' && app === 'claude-code')) continue;
       entry.reportedStatus = PROGRAM_STATES[state];
       if (entry.agent === 'codex' && state === 'working') entry.codexReview?.turnStarted();
-      if (entry.codexActivity) entry.codexActivity.oscAt = Date.now();
+      if (entry.codexActivity && replyToProbe) entry.codexActivity.oscAt = Date.now();
       continue;
     }
     if (!entry.agent) continue;
@@ -565,6 +596,31 @@ function trackCodexInput(entry, data) {
 const codexActivityFor = sessionId => sessionId
   ? { sessionId, startedAt: Date.now(), oscAt: 0, submittedAt: 0, turn: null }
   : null;
+
+function keptCodexActivity(sessionId, saved, now) {
+  const activity = codexActivityFor(sessionId);
+  if (!activity || saved?.sessionId !== sessionId) return activity;
+  const time = value => Number.isSafeInteger(value) && value >= 0 && value <= now;
+  for (const key of ['startedAt', 'oscAt', 'submittedAt']) {
+    if (time(saved[key])) activity[key] = saved[key];
+  }
+  if (['working', 'idle'].includes(saved.turn?.status) && time(saved.turn.at)) {
+    activity.turn = { status: saved.turn.status, at: saved.turn.at };
+  }
+  return activity;
+}
+
+const KEPT_CODEX_STATUSES = new Set(['idle', 'starting', 'working', 'blocked', 'error', 'unknown']);
+
+function reconcileKeptCodexHook(entry, previousScreen) {
+  if (!entry.keptCodexHook) return;
+  const screen = entry.reportedStatus ?? entry.titleStatus;
+  const official = hookStatus(entry.hookState);
+  if (!official || screen === previousScreen || !['idle', 'working'].includes(screen) || screen === official) return;
+  // No new hook has arrived yet. A new terminal transition can be the turn ending during the restart.
+  endAgentHookHandoff(entry.hookState);
+  entry.keptCodexHook = false;
+}
 
 // CLI-native image paste reads from the same Windows clipboard as ezShell.
 const WINDOWS_IMAGE_PASTE = { codex: '\x16', claude: '\x1bv' };
@@ -844,7 +900,7 @@ function createLocalShells({
       agent: undefined, reportStatus: undefined, externalAgent: undefined, inbox: undefined, picker: undefined, speedControl: undefined,
       codexInput: null, codexActivity: null, titleStatus: 'unknown', reportedStatus: null, pendingAntigravityStatus: null,
       screenApproval: false, chatInterrupts: 0, oscTail: '',
-      hookState: null, hookTitle: null, userInterruptAt: undefined
+      hookState: null, keptCodexHook: false, hookTitle: null, userInterruptAt: undefined
     });
     return binding;
   }
@@ -852,6 +908,14 @@ function createLocalShells({
   function finishExternalAgent(entry) {
     const binding = releaseExternalAgent(entry);
     binding?.onExit(binding.id);
+  }
+
+  /** A binding made outside attachExternalAgent (handed over by an update): ends with its CLI as that one does */
+  function watchExternalProcess(entry, binding) {
+    binding.timer = setInterval(() => {
+      if (!processAlive(binding.pid)) finishExternalAgent(entry);
+    }, AGENT_PROCESS_CHECK_MS);
+    binding.timer.unref?.();
   }
 
   function attachExternalAgent(id, entry, kind, pid, { agentId, setStatus, onExit, antigravity, allowWake, resumeId }) {
@@ -900,7 +964,10 @@ function createLocalShells({
   async function findAgentProcess({ pid, kind, shellId }) {
     const candidates = new Map();
     for (const [id, entry] of shells) {
-      if (!entry.development && !entry.exited && (!entry.agent || entry.externalAgent) && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
+      // A kept shell's agent without a binding (handed over by an app before keptExternalMeta) is a candidate too:
+      // bindAgentProcess binds it only under its handed-over id and reconnect credential
+      const keptUnbound = entry.adopted && entry.agent && !entry.externalAgent;
+      if (!entry.development && !entry.exited && (!entry.agent || entry.externalAgent || keptUnbound) && entry.pty.pid > 0) candidates.set(entry.pty.pid, { id, entry });
     }
     if (!candidates.size) return;
     let processes;
@@ -981,14 +1048,32 @@ function createLocalShells({
     }
     return registration => {
       if (shells.get(id) !== entry || entry.exited || entry.pty.pid !== ptyPid || !processAlive(agentPid)) return;
-      const existing = entry.externalAgent;
+      // An app before keptExternalMeta handed a typed CLI's shell over without its binding: the shell's agent comes
+      // back the same way, bound to the CLI found under this PTY, once its handed-over reconnect credential passes
+      const legacy = !entry.externalAgent && entry.adopted && entry.agent === request.kind && !entry.sleeping
+        ? { pid: agentPid, hadMcp: true, handed: true, legacy: true } : null;
+      const existing = entry.externalAgent ?? legacy;
       const sameAgent = existing?.pid === agentPid && entry.agent === request.kind;
       const waking = !existing && entry.sleeping?.phase === 'waking' && entry.sleeping.kind === request.kind;
       if (entry.sleeping && !waking && !sameAgent) throw new Error('셸의 에이전트가 아직 깨어나지 않았습니다.');
-      const existingId = waking ? entry.sleeping.agentId : sameAgent && existing.hadMcp ? existing.id : null;
+      // A binding handed over by an update knows its agent's id only from the record opened after the unlock
+      const keptId = sameAgent && existing.handed ? agents?.agentsOfShell?.(id)?.[0] ?? null : null;
+      const existingId = waking ? entry.sleeping.agentId : sameAgent && existing.hadMcp ? existing.id ?? keptId : null;
       const sameLiveCli = Boolean(sameAgent && agentStartedAt > 0 && existing.mcpProcessStartedAt === agentStartedAt);
       if (existingId) registration.authorizeBinding(existingId, waking, sameLiveCli);
       else registration.authorizeBinding?.(null, false, false);
+      // Authorized (its reconnect credential came with the handover): the kept binding becomes this agent's
+      if (sameAgent && existing.handed) {
+        if (existingId) {
+          Object.assign(existing, { id: existingId, onExit: registration.onExit });
+          if (existing.legacy) {
+            delete existing.legacy;
+            entry.externalAgent = existing;
+            watchExternalProcess(entry, existing);
+          }
+        }
+        delete existing.handed;
+      }
       // A CLI discovered through its own file has a provisional UI identity and no message lease.
       // The first MCP registration gets a new ID instead of authenticating that provisional ID by PID.
       const claudeSession = sameAgent ? existing.claudeSession : undefined;
@@ -1243,7 +1328,9 @@ function createLocalShells({
     const { pty, registration } = entry;
     pty.onData((data) => {
       if (!entry.exited) {
+        const previousScreen = entry.reportedStatus ?? entry.titleStatus;
         trackTerminalOsc(entry, data, platform);
+        reconcileKeptCodexHook(entry, previousScreen);
         reconcileHooks(entry);
         const status = agentStatus(entry);
         entry.reportStatus?.(status);
@@ -1365,23 +1452,45 @@ function createLocalShells({
       });
       agents?.adoptShell?.(shell.id);
       const now = Date.now();
-      const codexInput = agent === 'codex' ? { hasDraft: false, submitted: false } : null;
+      const codex = agent === 'codex' && meta.codex;
+      // An older app did not preserve the first-submit flag. Its kept Codex is already open.
+      const codexInput = agent === 'codex'
+        ? { hasDraft: codex?.hasDraft === true, submitted: codex?.submitted !== false } : null;
+      const hookState = codex && agents?.hooksEnabled?.() !== false ? restoreAgentHookState(codex.hook, agent, now) : null;
       const entry = {
         pty, agent, registration, codexInput, cols: size(shell.cols, 80), rows: size(shell.rows, 24), composing: false,
-        codexActivity: codexInput ? codexActivityFor(resumeId) : null, wakeMcp: false,
+        codexActivity: codexInput ? keptCodexActivity(resumeId, codex?.activity, now) : null, wakeMcp: false,
         cwd: pick(meta.cwd), launchDirectory: pick(meta.launchDirectory) ?? cwd, launchIdentity: keptLaunchIdentity(meta.launchIdentity),
         reportedDirectory: pick(meta.reportedDirectory),
         reportStatus: status => reportShellStatus(entry, registration?.setStatus, status),
         backlog: typeof shell.buffer === 'string' ? shell.buffer.slice(-BACKLOG_CHARS) : '', modes: keptModes(meta.modes, agent), modeTail: '',
-        exited: false, exitCode: null, titleStatus: 'unknown', reportedStatus: null, screenApproval: false, chatInterrupts: 0, oscTail: '',
+        exited: false, exitCode: null,
+        titleStatus: KEPT_CODEX_STATUSES.has(codex?.titleStatus) ? codex.titleStatus : 'unknown',
+        reportedStatus: KEPT_CODEX_STATUSES.has(codex?.reportedStatus) ? codex.reportedStatus : null,
+        screenApproval: false, chatInterrupts: 0, oscTail: '',
+        hookState, keptCodexHook: Boolean(hookStatus(hookState)),
+        userInterruptAt: Number.isSafeInteger(codex?.userInterruptAt) && codex.userInterruptAt <= now ? codex.userInterruptAt : undefined,
         activeAt: now, openedAt: now, sleeping: null, adopted: true, resumeId,
         claudeProfileId: agent === 'claude' && typeof meta.claudeProfileId === 'string' && SESSION_ID.test(meta.claudeProfileId)
           ? meta.claudeProfileId : undefined
       };
+      // A CLI the user started in this shell before the update: bound again while it runs. Without it the shell
+      // has an agent and no binding, findAgentProcess skips it, and the CLI's MCP never comes back (a typed Claude
+      // is refused for ever, a Codex on the shared bridge registers by folder only: no status, no inbox notice).
+      // 2026-11-28 user report, docs/fix/2026-11-28-typed-agents-after-update.md
+      const external = keptExternalAgent(meta.external, agent, processAlive);
+      if (external) {
+        entry.externalAgent = { ...external, handed: true, onExit: () => registration?.finish?.(null) };
+        watchExternalProcess(entry, entry.externalAgent);
+      }
       // What the screen was left in (bracketed paste, the title's working sign): the kept modes, then what the
       // kept output still says
       trackTerminalModes(entry, entry.backlog);
+      const previousScreen = entry.reportedStatus ?? entry.titleStatus;
+      const previousProgramStatus = entry.reportedStatus;
       trackTerminalOsc(entry, entry.backlog, platform, false);
+      if (entry.codexActivity && entry.reportedStatus !== previousProgramStatus) entry.codexActivity.oscAt = now;
+      reconcileKeptCodexHook(entry, previousScreen);
       if (registration) {
         observeInbox(shell.id, entry);
         // The wake reads the CLI's composer from its own screen, which starts empty, and an idle CLI draws
@@ -1392,17 +1501,19 @@ function createLocalShells({
       }
       shells.set(shell.id, entry);
       listen(shell.id, entry);
+      if (codexInput) {
+        reconcileHooks(entry);
+        const status = agentStatus(entry);
+        if (status !== 'unknown') entry.reportStatus?.(status);
+      }
       nextId = Math.max(nextId, Number(number) + 1);
       adopted.push(shell.id);
     }
     return adopted;
   }
 
-  /**
-   * Quitting to install an update. Shells in the session host go on there for the next app (the host was
-   * told to wait for it before the quit began); every other shell ends with its whole tree, as before.
-   */
-  function handOver() {
+  /** Queue metadata before the host's keep acknowledgment, which flushes the preceding messages. */
+  function stageHandover() {
     const endHosted = [];
     for (const [id, entry] of shells) {
       if (!entry.pty?.hosted || entry.exited) continue;
@@ -1425,10 +1536,23 @@ function createLocalShells({
         launchIdentity: identity ? { directory: identity.directory, dev: String(identity.dev), ino: String(identity.ino) } : null,
         resumeId: entry.resumeId ?? null,
         ...(entry.claudeProfileId && { claudeProfileId: entry.claudeProfileId }),
+        ...(entry.agent === 'codex' && entry.codexInput && { codex: {
+          ...entry.codexInput, titleStatus: entry.titleStatus, reportedStatus: entry.reportedStatus,
+          activity: entry.codexActivity, hook: exportAgentHookState(entry.hookState), userInterruptAt: entry.userInterruptAt
+        } }),
         // Bracketed paste and cursor keys: the next app reads the composer only with them (keptModes)
-        modes: { ...entry.modes }
+        modes: { ...entry.modes },
+        // A CLI the user started in this shell (not launched by the app): the next app binds it again, so its
+        // MCP can come back (keptExternalAgent, bindAgentProcess)
+        ...keptExternalMeta(entry)
       });
     }
+    return endHosted;
+  }
+
+  /** Quitting to install an update. Finish the shells that cannot run through it. */
+  function handOver() {
+    const endHosted = stageHandover();
     const staying = [...shells].filter(([id, entry]) => !entry.pty?.hosted || endHosted.includes(id));
     const pids = staying.filter(([, entry]) => !entry.exited && Number.isInteger(entry.pty?.pid) && entry.pty.pid > 0).map(([, entry]) => entry.pty.pid);
     if (pids.length > 0) killTrees(pids);
@@ -1926,7 +2050,7 @@ function createLocalShells({
   }
 
   return {
-    open, openDevelopmentTask, changeDevelopmentTask, drainDevelopmentTasks, takeKeptDevelopment, adoptDevelopment, dropKeptDevelopment, attach, write, pasteClipboardImage, resize, close, closeAll, adopt, handOver, bindAgentProcess, reportAntigravityStatus, currentDirectory, runAuthorityDirectory,
+    open, openDevelopmentTask, changeDevelopmentTask, drainDevelopmentTasks, takeKeptDevelopment, adoptDevelopment, dropKeptDevelopment, attach, write, pasteClipboardImage, resize, close, closeAll, adopt, stageHandover, handOver, bindAgentProcess, reportAntigravityStatus, currentDirectory, runAuthorityDirectory,
     /**
      * Every shell, oldest first. The shells outlive their tabs, so a window that reloaded (and lost
      * all its tabs) takes these back; otherwise they kept running unseen, agents included.
@@ -1965,7 +2089,11 @@ function createLocalShells({
           publishHookStatus(entry, status);
         }, () => report.kind === 'claude' && waitingForThisStop() && entry.hookTitle?.status === 'working');
       }
-      applyAgentHook(state, report, now, { stopBlocked: Boolean(block), screenBlocked: entry.screenApproval });
+      const accepted = applyAgentHook(state, report, now, { stopBlocked: Boolean(block), screenBlocked: entry.screenApproval });
+      if (accepted) {
+        entry.keptCodexHook = false;
+        if (entry.codexInput && report.event === 'UserPromptSubmit') entry.codexInput.submitted = true;
+      }
       const session = state.sessionId;
       if (session && session !== oldSession) agents?.setHookSession?.(agentId, session);
       if (report.kind === 'codex' && !report.subagent) clearCodexReview(entry);
@@ -1979,6 +2107,7 @@ function createLocalShells({
         clearHookTimer(entry);
         clearCodexReview(entry);
         entry.hookState = null;
+        entry.keptCodexHook = false;
         entry.hookTitle = null;
         entry.inbox?.clearStopWakes();
         publishHookStatus(entry, before);

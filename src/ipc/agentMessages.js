@@ -526,7 +526,15 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onUr
     if (!from) throw new Error('활성 ezShell 에이전트 세션에서 실행해 주세요.')
     if (isLocked()) throw new Error('먼저 앱 잠금을 해제해 주세요.')
     switch (request.method) {
-      case 'list': return { agents: [...agents.values()].filter(agent => isConnected(agent.id)).map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role })), self: from }
+      // An agent running in a local terminal whose message MCP is not connected is listed too, as
+      // connected: false (send refuses it): otherwise an agent counting the agents of a folder misses it
+      // while the sidebar shows it (2026-11-28 user report)
+      case 'list': return {
+        agents: [...agents.values()]
+          .filter(agent => isConnected(agent.id) || (agent.active && agent.shellId && agent.status !== 'ended'))
+          .map(({ id, kind, cwd }) => ({ id, kind, cwd, role: activeRole(id).role, ...(isConnected(id) ? {} : { connected: false }) })),
+        self: from
+      }
       case 'inspect-agent': return inspectAgent(request.id).state
       case 'run-list': case 'run-start': case 'run-restart': case 'run-stop': case 'run-wait': case 'run-log': case 'run-propose':
       case 'run-start-all': case 'run-stop-all': {
@@ -1209,6 +1217,8 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onUr
    * the agents start over (discardHandoff), as before this feature.
    */
   function importHandoff(record) {
+    // Once per handover: a second record (or one after discardHandoff) is not taken
+    if (!awaitingHandoff) return false
     const endpoint = validEndpoint(record?.endpoint, platform)
     const ok = record?.format === HANDOFF_FORMAT && record.version === HANDOFF_VERSION && endpoint &&
       keptEndpoint && endpoint.pipe === keptEndpoint.pipe && endpoint.directory === keptEndpoint.directory &&
@@ -1243,7 +1253,9 @@ function createAgentMessages({ notify, isLocked, onInboxChanged = () => {}, onUr
     for (const entry of record.hookSessions) {
       if (Array.isArray(entry) && known.has(entry[0]) && typeof entry[1] === 'string') hookSessions.set(entry[0], entry[1])
     }
-    keptEndpoint = null
+    // keptEndpoint stays: start() may not have picked its pipe yet (the unlock can come before the session host
+    // is up). Cleared here, start() took a new pipe and the CLIs still running sent to the old one: their hooks
+    // and MCP never reached this app. Taken once: awaitingHandoff (checked above) ends here.
     awaitingHandoff = false
     revision++
     settleAdoptions()

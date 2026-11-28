@@ -34,13 +34,23 @@
 
 .run-presets-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   min-height: 20px;
   color: var(--text-secondary);
   font-size: 11px;
 }
-.run-presets-head > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-presets-head > span { flex: 1 0 auto; white-space: nowrap; }
+.run-presets-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  margin-inline-start: auto;
+}
+.run-presets-head-actions > button { flex: none; white-space: nowrap; }
 .run-presets-head button {
   display: inline-flex;
   align-items: center;

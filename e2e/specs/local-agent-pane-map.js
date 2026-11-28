@@ -14,6 +14,8 @@ const { connect, createChecks, openLocalAgent, unlock } = require('../support/dr
   const tabs = `[...document.querySelectorAll('.terminal-tab')]`
   const agents = `window.electronAPI.agentMessagesSnapshot().then(state => state.agents.filter(agent => agent.active && agent.mcpConnected))`
   await unlock(driver)
+  await js(`localStorage.setItem('agent-work-style', 'trace'); document.documentElement.dataset.agentWorkStyle = 'trace'`)
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] })
   await send('Page.bringToFront')
 
   for (const kind of ['claude', 'codex', 'claude', 'codex', 'claude']) {
@@ -49,7 +51,8 @@ const { connect, createChecks, openLocalAgent, unlock } = require('../support/dr
   const statusFile = path.join(process.env.E2E_PROFILE, `${worker}-program-status`)
   const cell = `document.querySelector('.pane-map-cell[data-agent-id="${worker}"]')`
   const trace = `getComputedStyle(${cell}, '::after')`
-  check('an idle agent\'s cell has no trace', await until(`${cell}?.dataset.agentWork === 'idle' && ${trace}.opacity === '0'`))
+  check('an idle agent\'s cell has no trace', await until(`${cell}?.dataset.agentWork === 'idle' &&
+    ${trace}.opacity === '0' && ${trace}.animationPlayState === 'paused'`))
   // A prompt first, as a user starts a turn (local-agent-messages does the same)
   await js(`window.electronAPI.agentMessagesSnapshot().then(state => {
     const shellId = state.agents.find(agent => agent.id === ${JSON.stringify(worker)}).shellId
@@ -58,10 +61,18 @@ const { connect, createChecks, openLocalAgent, unlock } = require('../support/dr
   })`)
   fs.writeFileSync(statusFile, 'state=working:app=codex')
   check('a working agent\'s cell runs the trace around its border', await until(`
-    ${cell}?.dataset.agentWork === 'working' && ${trace}.opacity === '1' && ${trace}.animationPlayState === 'running'
-  `, 10000))
+    ${cell}?.dataset.agentWork === 'working' && ${trace}.animationName === 'local-agent-trace' &&
+    ${trace}.opacity === '1' && ${trace}.animationPlayState === 'running'
+  `, 10000), JSON.stringify(await js(`(() => {
+    const worker = ${cell}
+    if (!worker) return null
+    const effect = getComputedStyle(worker, '::after')
+    return { state: worker.dataset.agentWork, animation: effect.animationName, opacity: effect.opacity }
+  })()`)))
   await driver.shot('local-agent-pane-map-working')
   fs.writeFileSync(statusFile, 'state=idle:app=codex')
-  check('the trace goes when the agent rests', await until(`${cell}?.dataset.agentWork === 'idle' && ${trace}.opacity === '0'`, 10000))
+  check('the trace goes when the agent rests', await until(`${cell}?.dataset.agentWork === 'idle' &&
+    ${trace}.opacity === '0' && ${trace}.animationPlayState === 'paused'`, 10000))
+  driver.close()
   finish()
 })().catch(error => { console.error(error); process.exit(1) })
